@@ -174,6 +174,7 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
   dt_Fext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/dt_fext_z", 10);
   D_z_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/D_z", 10);
   VelocityErrorPublisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/velocity_error", 10);
+  joint_config_srv_ = get_node()->create_service<messages_fr3::srv::JointConfig>("/joint_config", std::bind(&CartesianImpedanceController::setJointConfig, this, std::placeholders::_1, std::placeholders::_2));
 
   RCLCPP_DEBUG(get_node()->get_logger(), "configured successfully");
   return CallbackReturn::SUCCESS;
@@ -271,6 +272,50 @@ void CartesianImpedanceController::calculate_dt_f_ext(double delta_time, double 
     dt_Fext_desired_publisher_->publish(dt_F_ext_desired_msg);
 }
 
+void CartesionImpedanceController::update_joint_config(Eigen::Quaterniond orientation_d, Eigen::Vector3d position_d, Eigen::Vector3d direction_d){
+
+    // convert orientation to euler angles
+    Eigen::Vector3d euler_angles = orientation_d.toRotationMatrix().eulerAngles(0,1,2);
+
+    // send the desired orientation, position and direction to the joint_config service
+    messages_fr3::srv::JointConfig::Request::SharedPtr request = std::make_shared<messages_fr3::srv::JointConfig::Request>();
+    request->x = position_d_[0];
+    request->y = position_d_[1];
+    request->z = position_d_[2];
+    request->roll = euler_angles[0]; 
+    request->pitch = euler_angles[1]; 
+    request->yaw = euler_angles[2]; 
+    request->directionx = direction_current[0];
+    request->directiony = direction_current[1];
+    request->directionz = direction_current[2];
+
+    // Send the service request
+    if (joint_config_srv_->wait_for_service(std::chrono::seconds(5))) {
+        auto future = joint_config_srv_->async_send_request(request);
+
+        if (rclcpp::spin_until_future_complete(get_node(), future) ==
+            rclcpp::FutureReturnCode::SUCCESS) {
+            auto response = future.get();
+            
+            // Access the joint configuration from the response
+            joint_config << response->joint1, response->joint2, response->joint3, 
+                            response->joint4, response->joint5, response->joint6, 
+                            response->joint7;
+
+            // Use the joint configuration as needed
+            RCLCPP_INFO(get_node()->get_logger(), "Received Joint Config: [%f, %f, %f, %f, %f, %f, %f]",
+                        joint_config[0], joint_config[1], joint_config[2], joint_config[3], 
+                        joint_config[4], joint_config[5], joint_config[6]);
+
+        } else {
+            RCLCPP_ERROR(get_node()->get_logger(), "Failed to call joint_config service.");
+        }
+    } else {
+        RCLCPP_ERROR(get_node()->get_logger(), "Service joint_config not available.");
+    }
+
+}
+
 controller_interface::return_type CartesianImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {  
 
   std::array<double, 49> mass = franka_robot_model_->getMassMatrix();
@@ -311,6 +356,8 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   if (control_act){
 
     if(drill_position_set == false){
+
+      // save the current orientation and pose as reference when drilling controller is activated
       orientation_d_ = orientation;
       position_d_ = position;
       drill_position_set = true;
@@ -330,6 +377,12 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
       direction_current = relative_rotation_matrix * direction_ref;
 
       direction_current.normalize();
+
+      // update the joint configuration to be optimal for the drilling task and before stiffness is adapted
+      if (joint_optimization_set == false){
+        update_joint_config(orientation_d_, position_d_, direction_current);
+        joint_optimization_set = true;
+      }
 
       projection_matrix_decrease.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() - direction_current * direction_current.transpose();
       projection_matrix_increase.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() + K_increase_gain*(direction_current * direction_current.transpose());

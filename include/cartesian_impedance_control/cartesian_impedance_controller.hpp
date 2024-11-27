@@ -48,6 +48,7 @@
 #include "franka_msgs/msg/errors.hpp"
 #include "messages_fr3/srv/set_pose.hpp"
 #include "messages_fr3/msg/jacobian_ee.hpp"
+#include "messages_fr3/srv/joint_config.hpp"
 #include "std_msgs/msg/float64.hpp"
 
 #include "franka_semantic_components/franka_robot_model.hpp"
@@ -93,6 +94,7 @@ public:
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dt_Fext_desired_publisher_; 
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr D_z_publisher_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr VelocityErrorPublisher_;
+    rclcpp::Service<messages_fr3::srv::JointConfig>::SharedPtr joint_config_srv_;
 
 
     //Functions
@@ -104,6 +106,7 @@ public:
     void arrayToMatrix(const std::array<double, 7>& inputArray, Eigen::Matrix<double, 7, 1>& resultMatrix);
     void calculate_accel_pose(double delta_time, double z_position);
     void calculate_dt_f_ext(double delta_time, double F_ext_desired);
+    void update_joint_config(Eigen::Quaterniond orientation_d, Eigen::Vector3d position_d, Eigen::Vector3d direction_d);
     Eigen::Matrix<double, 7, 1> saturateTorqueRate(const Eigen::Matrix<double, 7, 1>& tau_d_calculated, const Eigen::Matrix<double, 7, 1>& tau_J_d);  
     std::array<double, 6> convertToStdArray(const geometry_msgs::msg::WrenchStamped& wrench);
     
@@ -187,6 +190,7 @@ public:
     Eigen::Matrix<double, 7, 1> q_d_nullspace_;
     Eigen::Matrix<double, 6, 1> error;
     Eigen::Vector3d drill_start_position; 
+    Eigen::Matrix<double, 7, 1> joint_config;
     std::vector<double> drill_velocities_;
     std::vector<double> drill_forces_;
     double nullspace_stiffness_{0.001};
@@ -256,6 +260,7 @@ public:
     bool projection_matrix_decrease_set = false; // projection matrix set flag
     bool projection_matrix_increase_set = false; // projection matrix set flag
     bool drill_position_set = false; // drill position set flag
+    bool joint_optimization_set = false; // joint optimization set flag
 
 
     int accel_mode_ = 0; // acceleration calculation mode flag

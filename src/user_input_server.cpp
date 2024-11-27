@@ -61,7 +61,7 @@ void UserInputServer::SetMode(const std::shared_ptr<messages_fr3::srv::SetMode::
 {   
     try {
             (*control_mode_) = request->mode;
-            std::cout << "Went into setMode" << std::endl;
+            std::cout << "Went into controlMode" << std::endl;
             response->success = true;
             response->error_message = "";
         } catch (const std::exception &e) {
@@ -75,7 +75,6 @@ void UserInputServer::ControllerActivation(const std::shared_ptr<messages_fr3::s
     (*controller_activation_) = request->controller_activation;
     std::cout << "Went into controllerActivation" << std::endl;
 }
-
 
 int UserInputServer::main(int /*argc*/, char** /***argv*/)
 {    
