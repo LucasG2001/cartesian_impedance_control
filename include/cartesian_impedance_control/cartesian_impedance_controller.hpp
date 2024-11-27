@@ -90,7 +90,7 @@ public:
     rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr franka_state_subscriber = nullptr;
     rclcpp::Service<messages_fr3::srv::SetPose>::SharedPtr pose_srv_;
     rclcpp::Publisher<messages_fr3::msg::JacobianEE>::SharedPtr jacobian_ee_publisher_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dt_Fext_z_publisher_; 
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dt_Fext_desired_publisher_; 
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr D_z_publisher_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr VelocityErrorPublisher_;
 
@@ -103,7 +103,7 @@ public:
     void arrayToMatrix(const std::array<double, 6>& inputArray, Eigen::Matrix<double, 6, 1>& resultMatrix);
     void arrayToMatrix(const std::array<double, 7>& inputArray, Eigen::Matrix<double, 7, 1>& resultMatrix);
     void calculate_accel_pose(double delta_time, double z_position);
-    void calculate_dt_f_ext_z(double delta_time, double F_ext_z);
+    void calculate_dt_f_ext(double delta_time, double F_ext_desired);
     Eigen::Matrix<double, 7, 1> saturateTorqueRate(const Eigen::Matrix<double, 7, 1>& tau_d_calculated, const Eigen::Matrix<double, 7, 1>& tau_J_d);  
     std::array<double, 6> convertToStdArray(const geometry_msgs::msg::WrenchStamped& wrench);
     
@@ -197,9 +197,9 @@ public:
     double previous_z_acceleration_ = 0.0;
     double z_acceleration = 0.0;
     double z_velocity = 0.0;
-    double dt_f_ext_z = 0.0;
-    double previous_dt_F_ext_z = 0.0;
-    double previous_F_ext_z = 0.0;
+    double dt_F_ext_desired = 0.0;
+    double previous_dt_F_ext_desired = 0.0;
+    double previous_F_ext_desired = 0.0;
     double target_drill_velocity_ = -0.008;
     double sum_drill_velocity_ = 0.0;
     double velocity_error = 0.0;

@@ -171,7 +171,7 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
 
   // Initialize publisher here
   jacobian_ee_publisher_ = get_node()->create_publisher<messages_fr3::msg::JacobianEE>("/jacobian_ee", 10);
-  dt_Fext_z_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/dt_fext_z", 10);
+  dt_Fext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/dt_fext_z", 10);
   D_z_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/D_z", 10);
   VelocityErrorPublisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/velocity_error", 10);
 
@@ -255,20 +255,20 @@ void CartesianImpedanceController::calculate_accel_pose(double delta_time, doubl
     previous_z_acceleration_ = z_acceleration;
 }
 
-void CartesianImpedanceController::calculate_dt_f_ext_z(double delta_time, double F_ext_z) {
-    // Calculate the dt_f_ext_z
-    dt_f_ext_z = (F_ext_z - previous_F_ext_z) / delta_time;
+void CartesianImpedanceController::calculate_dt_f_ext(double delta_time, double F_ext_desired) {
+    // Calculate the dt_F_ext_desired
+    dt_F_ext_desired = (F_ext_desired - previous_F_ext_desired) / delta_time;
 
-    // Low-pass filter dt_f_ext_z
-    dt_f_ext_z = 0.1 * dt_f_ext_z + 0.9 * previous_dt_F_ext_z;
+    // Low-pass filter dt_F_ext_desired
+    dt_F_ext_desired = 0.1 * dt_F_ext_desired + 0.9 * previous_dt_F_ext_desired;
 
-    // Update previous dt_f_ext_z for the next iteration
-    previous_dt_F_ext_z = dt_f_ext_z;
+    // Update previous dt_F_ext_desired for the next iteration
+    previous_dt_F_ext_desired = dt_F_ext_desired;
 
     // Publish the jointEEState message
-    std_msgs::msg::Float64 dt_f_ext_z_msg;
-    dt_f_ext_z_msg.data = dt_f_ext_z;
-    dt_Fext_z_publisher_->publish(dt_f_ext_z_msg);
+    std_msgs::msg::Float64 dt_F_ext_desired_msg;
+    dt_F_ext_desired_msg.data = dt_F_ext_desired;
+    dt_Fext_desired_publisher_->publish(dt_F_ext_desired_msg);
 }
 
 controller_interface::return_type CartesianImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {  
@@ -288,49 +288,15 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   double z_position = position.z();
   double previous_z_position = z_position;
 
-  double F_ext_z = O_F_ext_hat_K_M(2);
-  double previous_F_ext_z = F_ext_z;
-
   // Calculate the Jacobian derivative using finite differences
   Eigen::Matrix<double, 6, 7> jacobian_EE_derivative;
   
   updateJointStates();
 
   calculate_accel_pose(dt, z_position);
-
-  calculate_dt_f_ext_z(dt,F_ext_z);
   
   // Update previous z position for the next iteration
   previous_z_position_ = z_position;
-
-
-  // save the position when the drill is activated
-  if (drill_act && drill_start_posistion_set == false){
-    drill_start_position = position;
-    drill_start_posistion_set = true;
-  }
-
-  // save all the velocities from start point of drilling into an array
-  if (drill_start_posistion_set && target_drill_velocity_set == false){
-    drill_velocities_.push_back(z_velocity);
-    drill_forces_.push_back(F_ext_z);
-
-    // once we have drilled 1cm take the average of the drill velocities and set this to the target velocity
-    if (drill_start_position.z() - position.z() > 0.005){
-      sum_drill_velocity_ = std::accumulate(drill_velocities_.begin(), drill_velocities_.end(), 0.0);
-      sum_drill_force_ = std::accumulate(drill_forces_.begin(), drill_forces_.end(), 0.0);
-      target_drill_force_ = sum_drill_force_ / drill_forces_.size();
-      target_dampening = target_drill_force_ / target_drill_velocity_;
-      target_drill_velocity_set = true;
-    }
-  }
-  
-  velocity_error = target_drill_velocity_ - z_velocity;
-
-  // publish velicity error
-  std_msgs::msg::Float64 velocity_error_msg;
-  velocity_error_msg.data = velocity_error;
-  VelocityErrorPublisher_->publish(velocity_error_msg);
 
   // in free float mode we do not control the robot but to not have a jump in orientation when reactivated we set the desired orientation to the current one
   if (mode_){
@@ -378,7 +344,42 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   }
 
-  if (abs(dt_f_ext_z) > 5500 && control_act && accel_trigger == false) {
+  double F_ext_desired = O_F_ext_hat_K_M.head(3).dot(direction_current);
+  double previous_F_ext_desired = F_ext_desired;
+
+  calculate_dt_f_ext(dt,F_ext_desired);
+
+  // save the position when the drill is activated
+  if (drill_act && drill_start_posistion_set == false){
+    drill_start_position = position;
+    drill_start_posistion_set = true;
+  }
+
+  // save all the velocities from start point of drilling into an array
+  if (drill_start_posistion_set && target_drill_velocity_set == false){
+    drill_velocities_.push_back(z_velocity);
+    drill_forces_.push_back(F_ext_desired);
+
+    // once we have drilled 1cm take the average of the drill velocities and set this to the target velocity
+    if (drill_start_position.z() - position.z() > 0.005){
+      sum_drill_velocity_ = std::accumulate(drill_velocities_.begin(), drill_velocities_.end(), 0.0);
+      sum_drill_force_ = std::accumulate(drill_forces_.begin(), drill_forces_.end(), 0.0);
+      target_drill_force_ = sum_drill_force_ / drill_forces_.size();
+      target_dampening = target_drill_force_ / target_drill_velocity_;
+      target_drill_velocity_set = true;
+    }
+  }
+  
+  velocity_error = target_drill_velocity_ - z_velocity;
+
+  // publish velicity error
+  std_msgs::msg::Float64 velocity_error_msg;
+  velocity_error_msg.data = velocity_error;
+  VelocityErrorPublisher_->publish(velocity_error_msg);
+
+
+
+  if (dt_F_ext_desired < -5500 && control_act && accel_trigger == false) {
     // Start the ramping process if the condition is met
     ramping_active_ = true;       
     position_set_ = true;
@@ -440,7 +441,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     D.diagonal()[2] = D_drilling_target; // this is in drilling mode
     
     // increase D to maintain target velocity
-    if (target_drill_velocity_set && abs(dt_f_ext_z) > 5000){
+    if (target_drill_velocity_set && abs(dt_F_ext_desired) > 5000){
       brake_through = true;
     }
 
@@ -519,21 +520,23 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     /* std::cout << "Control mode: " << mode_ << std::endl; */
     /* std::cout << "Position target :" << position_d_target_ << std::endl; */
     // print the phrobenius norm of the K
-    std::cout << "K_norm: " << K.norm() << std::endl;
+    //std::cout << "K_norm: " << K.norm() << std::endl;
     // std::cout << "Drilling actived: " << drill_act << std::endl;
     std::cout << "Stiffness:\n " << K << std::endl;
-    std::cout << "Damping:\n " << D << std::endl;
-    std::cout << " F_impedance: " << F_impedance << std::endl;
+    //std::cout << "Damping:\n " << D << std::endl;
+    //std::cout << " F_impedance: " << F_impedance << std::endl;
     // std::cout << "Damping_z:\n " << D.diagonal()[2] << std::endl;
     // std::cout << "z_acceleration:\n " << z_acceleration << std::endl;
     // std::cout << "target_drill_velocity_:\n " << target_drill_velocity_ << std::endl;
     // std::cout << "targer_drill_force_:\n " << target_drill_force_ << std::endl;
     // std::cout << "target_dampening:\n " << target_dampening << std::endl;
     // std::cout << "projection_matrix_decrease:\n " << projection_matrix_decrease << std::endl;
-    std::cout << "k_top_left:\n " << K.topLeftCorner<3, 3>() << std::endl;
-    std::cout << "projection_top_left:\n " << projection_top_left << std::endl;
+    //std::cout << "k_top_left:\n " << K.topLeftCorner<3, 3>() << std::endl;
+    //std::cout << "projection_top_left:\n " << projection_top_left << std::endl;
     std::cout << "direction_current:\n " << direction_current << std::endl;
     /* std::cout << "elapsed_time:\n " << elapsed_time << std::endl; */
+    std::cout << "dt_fext_desired:\n " << dt_F_ext_desired << std::endl;
+    std::cout << "magnitude of direction_current:\n " << direction_current.norm() << std::endl;
   }
   outcounter++;
   update_stiffness_and_references();
