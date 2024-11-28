@@ -174,7 +174,14 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
   dt_Fext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/dt_fext_z", 10);
   D_z_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/D_z", 10);
   VelocityErrorPublisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/velocity_error", 10);
-  joint_config_srv_ = get_node()->create_service<messages_fr3::srv::JointConfig>("/joint_config", std::bind(&CartesianImpedanceController::setJointConfig, this, std::placeholders::_1, std::placeholders::_2));
+  pose_direction_publisher_ = get_node()->create_publisher<messages_fr3::msg::PoseDirection>("/pose_direction", 10);
+
+  // Initialize subscriber here
+  joint_config_subscriber_ = get_node()->create_subscription<messages_fr3::msg::JointConfig>(
+    "/joint_config",
+    10,
+    std::bind(&CartesianImpedanceController::jointConfigCallback, this, std::placeholders::_1)
+  );
 
   RCLCPP_DEBUG(get_node()->get_logger(), "configured successfully");
   return CallbackReturn::SUCCESS;
@@ -272,48 +279,46 @@ void CartesianImpedanceController::calculate_dt_f_ext(double delta_time, double 
     dt_Fext_desired_publisher_->publish(dt_F_ext_desired_msg);
 }
 
-void CartesionImpedanceController::update_joint_config(Eigen::Quaterniond orientation_d, Eigen::Vector3d position_d, Eigen::Vector3d direction_d){
+void CartesianImpedanceController::update_joint_config(Eigen::Quaterniond orientation_d, Eigen::Vector3d position_d, Eigen::Vector3d direction_d){
 
     // convert orientation to euler angles
     Eigen::Vector3d euler_angles = orientation_d.toRotationMatrix().eulerAngles(0,1,2);
 
-    // send the desired orientation, position and direction to the joint_config service
-    messages_fr3::srv::JointConfig::Request::SharedPtr request = std::make_shared<messages_fr3::srv::JointConfig::Request>();
-    request->x = position_d_[0];
-    request->y = position_d_[1];
-    request->z = position_d_[2];
-    request->roll = euler_angles[0]; 
-    request->pitch = euler_angles[1]; 
-    request->yaw = euler_angles[2]; 
-    request->directionx = direction_current[0];
-    request->directiony = direction_current[1];
-    request->directionz = direction_current[2];
+    // publish the pose and direction
+    messages_fr3::msg::PoseDirection pose_direction_msg;
+    
+    pose_direction_msg.x = position_d.x();
+    pose_direction_msg.y = position_d.y();
+    pose_direction_msg.z = position_d.z();
+    pose_direction_msg.roll = euler_angles[0];
+    pose_direction_msg.pitch = euler_angles[1];
+    pose_direction_msg.yaw = euler_angles[2];
+    pose_direction_msg.directionx = direction_d.x();
+    pose_direction_msg.directiony = direction_d.y();
+    pose_direction_msg.directionz = direction_d.z();
 
-    // Send the service request
-    if (joint_config_srv_->wait_for_service(std::chrono::seconds(5))) {
-        auto future = joint_config_srv_->async_send_request(request);
+    // Publish the message
+    pose_direction_publisher_->publish(pose_direction_msg);
 
-        if (rclcpp::spin_until_future_complete(get_node(), future) ==
-            rclcpp::FutureReturnCode::SUCCESS) {
-            auto response = future.get();
-            
-            // Access the joint configuration from the response
-            joint_config << response->joint1, response->joint2, response->joint3, 
-                            response->joint4, response->joint5, response->joint6, 
-                            response->joint7;
+}
 
-            // Use the joint configuration as needed
-            RCLCPP_INFO(get_node()->get_logger(), "Received Joint Config: [%f, %f, %f, %f, %f, %f, %f]",
-                        joint_config[0], joint_config[1], joint_config[2], joint_config[3], 
-                        joint_config[4], joint_config[5], joint_config[6]);
+void CartesianImpedanceController::jointConfigCallback(const messages_fr3::msg::JointConfig::SharedPtr msg) {
+    
+    joint_config[0] = msg -> joint1;
+    joint_config[1] = msg -> joint2;
+    joint_config[2] = msg -> joint3;
+    joint_config[3] = msg -> joint4;
+    joint_config[4] = msg -> joint5;
+    joint_config[5] = msg -> joint6;
+    joint_config[6] = msg -> joint7;
 
-        } else {
-            RCLCPP_ERROR(get_node()->get_logger(), "Failed to call joint_config service.");
-        }
-    } else {
-        RCLCPP_ERROR(get_node()->get_logger(), "Service joint_config not available.");
-    }
-
+    RCLCPP_INFO(
+        get_node()->get_logger(),
+        "Received Joint Config: [%f, %f, %f, %f, %f, %f]",
+        joint_config[0], joint_config[1], joint_config[2],
+        joint_config[3], joint_config[4], joint_config[5],
+        joint_config[6]
+    );
 }
 
 controller_interface::return_type CartesianImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {  
@@ -590,6 +595,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     /* std::cout << "elapsed_time:\n " << elapsed_time << std::endl; */
     std::cout << "dt_fext_desired:\n " << dt_F_ext_desired << std::endl;
     std::cout << "magnitude of direction_current:\n " << direction_current.norm() << std::endl;
+    std::cout << "joint_config:\n " << joint_config << std::endl;
   }
   outcounter++;
   update_stiffness_and_references();

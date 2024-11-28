@@ -48,7 +48,8 @@
 #include "franka_msgs/msg/errors.hpp"
 #include "messages_fr3/srv/set_pose.hpp"
 #include "messages_fr3/msg/jacobian_ee.hpp"
-#include "messages_fr3/srv/joint_config.hpp"
+#include "messages_fr3/msg/pose_direction.hpp"
+#include "messages_fr3/msg/joint_config.hpp"
 #include "std_msgs/msg/float64.hpp"
 
 #include "franka_semantic_components/franka_robot_model.hpp"
@@ -94,7 +95,8 @@ public:
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dt_Fext_desired_publisher_; 
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr D_z_publisher_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr VelocityErrorPublisher_;
-    rclcpp::Service<messages_fr3::srv::JointConfig>::SharedPtr joint_config_srv_;
+    rclcpp::Publisher<messages_fr3::msg::PoseDirection>::SharedPtr pose_direction_publisher_;
+    rclcpp::Subscription<messages_fr3::msg::JointConfig>::SharedPtr joint_config_subscriber_;
 
 
     //Functions
@@ -107,6 +109,7 @@ public:
     void calculate_accel_pose(double delta_time, double z_position);
     void calculate_dt_f_ext(double delta_time, double F_ext_desired);
     void update_joint_config(Eigen::Quaterniond orientation_d, Eigen::Vector3d position_d, Eigen::Vector3d direction_d);
+    void jointConfigCallback(const messages_fr3::msg::JointConfig::SharedPtr msg);
     Eigen::Matrix<double, 7, 1> saturateTorqueRate(const Eigen::Matrix<double, 7, 1>& tau_d_calculated, const Eigen::Matrix<double, 7, 1>& tau_J_d);  
     std::array<double, 6> convertToStdArray(const geometry_msgs::msg::WrenchStamped& wrench);
     

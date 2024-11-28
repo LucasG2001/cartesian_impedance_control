@@ -34,13 +34,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    start_optimizer = Node(
-        package = 'joint_position_optimizer',
-        executable = 'ManipulabilityOptimizer.py',
-        name = 'manipulability_optimizer',
-        output = 'log',
-    )
-
     return LaunchDescription([
         DeclareLaunchArgument(
             robot_ip_parameter_name,
@@ -95,15 +88,6 @@ def generate_launch_description():
                 on_exit=[start_controller],
             )
         ),
-
-        # Start the optimizer after the controller starts
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=start_controller,
-                on_exit=[start_optimizer],
-            )
-        ),
-
     ])
 
 
