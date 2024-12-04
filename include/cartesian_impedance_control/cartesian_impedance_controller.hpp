@@ -196,8 +196,8 @@ public:
     Eigen::Matrix<double, 7, 1> joint_config;
     std::vector<double> drill_velocities_;
     std::vector<double> drill_forces_;
-    double nullspace_stiffness_{0.001};
-    double nullspace_stiffness_target_{0.001};
+    double nullspace_stiffness_{0.0};
+    double nullspace_stiffness_target_{1};
     // Previous values for z position, velocity, and acceleration
     double previous_z_position_ = 0.0;
     double previous_z_velocity_ = 0.0;
@@ -223,7 +223,8 @@ public:
     double target_dampening = 0.0;
     double target_drill_force_ = 0.0;
     double sum_drill_force_ = 0.0;
-    double K_increase_gain = 1.0;
+    double K_increase_gain = 2.15;
+    double trigger_counter = 0.0;
 
     double alpha = 0.0;
     double time_constant = 0.0;

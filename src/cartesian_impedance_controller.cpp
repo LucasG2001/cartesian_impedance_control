@@ -360,11 +360,14 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   if (control_act){
 
+    mode_ = false;
+
     if(drill_position_set == false){
 
       // save the current orientation and pose as reference when drilling controller is activated
       orientation_d_ = orientation;
       position_d_ = position;
+
       drill_position_set = true;
     }
     
@@ -386,6 +389,11 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
       // update the joint configuration to be optimal for the drilling task and before stiffness is adapted
       if (joint_optimization_set == false){
         update_joint_config(orientation_d_, position_d_, direction_current);
+
+        // overwrite the q_d_nullspace_ with the joint_config values
+        q_d_nullspace_ = joint_config;
+        std::cout << "initial q:\n" << q_ << std::endl;
+        config_control = true;
         joint_optimization_set = true;
       }
 
@@ -435,18 +443,27 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   velocity_error_msg.data = velocity_error;
   VelocityErrorPublisher_->publish(velocity_error_msg);
 
+  // When external force is below threshold, allow trigger detection
+  if (dt_F_ext_desired > -4300 && trigger_counter < 2) {
+    accel_trigger = false;
+  }
 
-
-  if (dt_F_ext_desired < -5500 && control_act && accel_trigger == false) {
-    // Start the ramping process if the condition is met
-    ramping_active_ = true;       
-    position_set_ = true;
-    position_accel_lim = position - 0.01 * direction_current;   // ADAJUST TO THE POSITION IN DRILLING DIRECTION
+  if (dt_F_ext_desired < -4500 && control_act && accel_trigger == false) {
+    
+    trigger_counter += 1;
     accel_trigger = true;
+
+    // Start the ramping process if the condition is met
+    if (trigger_counter > 1){
+      ramping_active_ = true;       
+      position_set_ = true;
+      position_accel_lim = position - 0.012 * direction_current;   // ADAJUST TO THE POSITION IN DRILLING DIRECTION  
+    }
+
   }
 
   if (ramping_active_) {
-        time_constant = 0.01; // Adjust this to control the response speed
+        time_constant = 0.001; // Adjust this to control the response speed
         alpha = 1.0 - exp(-period.seconds() / time_constant);
 
         // Calculate the target stiffness value
@@ -461,7 +478,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
             elapsed_time += period.seconds();
         }
 
-        if (elapsed_time > 3.0) {
+        /* if (elapsed_time > 3.0) {
           // Reset the ramping process after 5 seconds
           ramping_active_ = false;
           accel_trigger = false;
@@ -469,7 +486,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
           K.topLeftCorner(3,3) = projection_matrix_decrease.topLeftCorner(3,3) * K_original.topLeftCorner(3,3);
           position_set_ = false;
           position_d_ = position;
-        }
+        } */
   } 
 
   if (position_set_){
@@ -539,11 +556,11 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) -
                     jacobian.transpose() * jacobian_transpose_pinv) *
-                    (nullspace_stiffness_ * config_control * (q_d_nullspace_ - q_) - //if config_control = true we control the whole robot configuration
+                    (nullspace_stiffness_ * (q_d_nullspace_ - q_) - //if config_control = true we control the whole robot configuration
                     (2.0 * sqrt(nullspace_stiffness_)) * dq_);  // if config control ) false we don't care about the joint position
 
   tau_impedance = jacobian.transpose() * Sm * (F_impedance /*+ F_repulsion + F_potential*/) + jacobian.transpose() * Sf * F_cmd;
-  Eigen::VectorXd tau_d_placeholder = tau_impedance + tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
+  Eigen::VectorXd tau_d_placeholder = tau_impedance + config_control * tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
   
   // free floating mode
   if (mode_) {
@@ -591,11 +608,14 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     // std::cout << "projection_matrix_decrease:\n " << projection_matrix_decrease << std::endl;
     //std::cout << "k_top_left:\n " << K.topLeftCorner<3, 3>() << std::endl;
     //std::cout << "projection_top_left:\n " << projection_top_left << std::endl;
-    std::cout << "direction_current:\n " << direction_current << std::endl;
+    //std::cout << "direction_current:\n " << direction_current << std::endl;
     /* std::cout << "elapsed_time:\n " << elapsed_time << std::endl; */
     std::cout << "dt_fext_desired:\n " << dt_F_ext_desired << std::endl;
-    std::cout << "magnitude of direction_current:\n " << direction_current.norm() << std::endl;
+    //std::cout << "magnitude of direction_current:\n " << direction_current.norm() << std::endl;
     std::cout << "joint_config:\n " << joint_config << std::endl;
+    std::cout << "tau_nullspace:\n " << tau_nullspace << std::endl;
+    std::cout << "free floating mode: " << mode_ << std::endl;
+    std::cout << "tau_d:\n" << tau_d << std::endl;
   }
   outcounter++;
   update_stiffness_and_references();
