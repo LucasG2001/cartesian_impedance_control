@@ -48,8 +48,7 @@ int main(int argc, char **argv) {
     while (rclcpp::ok()){
 
         std::cout << "Enter the next task: \n [1] --> Change position \n [2] --> Change impedance parameters \n"
-                << " [3] --> Choose control mode \n [4] --> Drill Position activation \n [5] --> Update Stiffness \n" 
-                << " [6] Logging " << std::endl;
+                << " [3] --> Choose control mode \n [4] --> Drill Position activation \n [5] --> Logging \n" << std::endl;
         std:: cin >> task_selection;
         switch (task_selection){
             case 1:{ 
@@ -188,7 +187,7 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
-            case 5: {
+            /* case 5: {
                 std::cout << "Set stiffness: \n [1] --> adjust z component \n [2] --> default values\n";
                 std::cin >> param_selection;
                 switch(param_selection){
@@ -229,8 +228,8 @@ int main(int argc, char **argv) {
                 } else {
                     RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Failed to call service setStiffness");
                 } break;
-            }
-            case 6:{
+            } */
+            case 5:{
                 std::cout << "Activate logging: \n [1] --> Activate \n [2] --> Deactivate\n";
                 std::cin >> planner_selection;
                 switch(planner_selection){

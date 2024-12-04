@@ -44,23 +44,20 @@ void CartesianImpedanceController::update_stiffness_and_references(){
   nullspace_stiffness_ = filter_params_ * nullspace_stiffness_target_ + (1.0 - filter_params_) * nullspace_stiffness_;
   //std::lock_guard<std::mutex> position_d_target_mutex_lock(position_and_orientation_d_target_mutex_);
   
-  
-  if (control_act){
-    
-    // orientation_d_target_ = Eigen::AngleAxisd(-M_PI/2, Eigen::Vector3d::UnitX())
-    //                     * Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY())
-    //                     * Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ());
-    
-    // save the current orientation as reference when drilling controller is activated
-    if (orientation_set == false)
-    {
+  if (!mode_ && !control_act){
+    orientation_d_target_ = Eigen::AngleAxisd(rotation_d_target_[0], Eigen::Vector3d::UnitX())
+                        * Eigen::AngleAxisd(rotation_d_target_[1], Eigen::Vector3d::UnitY())
+                        * Eigen::AngleAxisd(rotation_d_target_[2], Eigen::Vector3d::UnitZ());
+  }
+  else if (control_act){
+    if (orientation_set == false){
       orientation_d_target_ = orientation;
       position_d_target_ = position;
       orientation_set = true;
     }
-
-    mode_ = false;
-
+  }
+  else {
+    orientation_d_target_ = orientation;
   }
 
   position_d_ = filter_params_ * position_d_target_ + (1.0 - filter_params_) * position_d_;
@@ -334,7 +331,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   Eigen::Affine3d transform(Eigen::Matrix4d::Map(pose.data()));
   position = transform.translation();
   orientation = transform.rotation();
-  
+
   double z_position = position.z();
   double previous_z_position = z_position;
 
@@ -349,18 +346,28 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   previous_z_position_ = z_position;
 
   // in free float mode we do not control the robot but to not have a jump in orientation when reactivated we set the desired orientation to the current one
-  if (mode_){
+  if (mode_ && !control_act){
     orientation_d_target_ = orientation;
+
+    // reset all the flags
+    drill_position_set = false;
+    drill_act = false;
+    drill_start_posistion_set = false;
+    drill_forces_.clear();
+    projection_matrix_decrease_set = false;
+    projection_matrix_increase_set = false;
+    drill_start_posistion_set = false;
+    joint_optimization_set = false;
+    orientation_set = false;
+    target_drill_velocity_set = false;
+    brake_through = false;
+    trigger_counter = 0;
+    ramping_active_ = false;
+    position_set_ = false;
+
   } 
-  else if (!control_act){
-    orientation_d_target_ = Eigen::AngleAxisd(rotation_d_target_[0], Eigen::Vector3d::UnitX())
-                        * Eigen::AngleAxisd(rotation_d_target_[1], Eigen::Vector3d::UnitY())
-                        * Eigen::AngleAxisd(rotation_d_target_[2], Eigen::Vector3d::UnitZ());
-  }
-
+  
   if (control_act){
-
-    mode_ = false;
 
     if(drill_position_set == false){
 
@@ -457,7 +464,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     if (trigger_counter > 1){
       ramping_active_ = true;       
       position_set_ = true;
-      position_accel_lim = position - 0.012 * direction_current;   // ADAJUST TO THE POSITION IN DRILLING DIRECTION  
+      position_accel_lim = position - 0.012 * direction_current; 
     }
 
   }
@@ -477,16 +484,6 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
             K.topLeftCorner(3,3) = target_K;
             elapsed_time += period.seconds();
         }
-
-        /* if (elapsed_time > 3.0) {
-          // Reset the ramping process after 5 seconds
-          ramping_active_ = false;
-          accel_trigger = false;
-          elapsed_time = 0.0;
-          K.topLeftCorner(3,3) = projection_matrix_decrease.topLeftCorner(3,3) * K_original.topLeftCorner(3,3);
-          position_set_ = false;
-          position_d_ = position;
-        } */
   } 
 
   if (position_set_){
@@ -563,7 +560,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   Eigen::VectorXd tau_d_placeholder = tau_impedance + config_control * tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
   
   // free floating mode
-  if (mode_) {
+  if (mode_ && !control_act){ 
     tau_d_placeholder.setZero();
   }
 
