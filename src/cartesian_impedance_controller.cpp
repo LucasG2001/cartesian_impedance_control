@@ -380,7 +380,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     
     if (projection_matrix_decrease_set == false){
       
-      K_original = K;
+      // K_original = K;
 
       // determine relative rotation
       relative_rotation = orientation*rotation_ref.inverse();
@@ -502,7 +502,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   Lambda = (jacobian * M.inverse() * jacobian.transpose()).inverse();    
     // correcting D to be critically damped
-  D =  D_gain* K.cwiseMax(0.0).cwiseSqrt() * Lambda.diagonal().cwiseSqrt().asDiagonal();
+  D =  D_gain* K.cwiseMax(0.0).cwiseSqrt() * Lambda.cwiseMax(0.0).diagonal().cwiseSqrt().asDiagonal();
   
   D.topRightCorner(3,3).setZero();
   D.bottomLeftCorner(3,3).setZero();
@@ -556,7 +556,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
                     (nullspace_stiffness_ * (q_d_nullspace_ - q_) - //if config_control = true we control the whole robot configuration
                     (2.0 * sqrt(nullspace_stiffness_)) * dq_);  // if config control ) false we don't care about the joint position
 
-  tau_impedance = jacobian.transpose() * Sm * (F_impedance /*+ F_repulsion + F_potential*/) + jacobian.transpose() * Sf * F_cmd;
+  tau_impedance = jacobian.transpose() * Sm * (F_impedance /*+ F_repulsion + F_potential*/); /* + jacobian.transpose() * Sf * F_cmd; */
   Eigen::VectorXd tau_d_placeholder = tau_impedance + config_control * tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
   
   // free floating mode
@@ -613,6 +613,10 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     std::cout << "tau_nullspace:\n " << tau_nullspace << std::endl;
     std::cout << "free floating mode: " << mode_ << std::endl;
     std::cout << "tau_d:\n" << tau_d << std::endl;
+    std::cout << "F_impedance:\n" << F_impedance << std::endl;
+    std::cout << "Damping:\n" << D << std::endl;
+    std::cout << "Mass:\n" << M << std::endl;
+    std::cout << "Lambda:\n" << Lambda << std::endl;
   }
   outcounter++;
   update_stiffness_and_references();
