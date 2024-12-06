@@ -1,8 +1,23 @@
 # cartesian_impedance_control
 
-### Usage for Othopedic Drilling
+### Usage for Orthopedic Drilling
+
+#### Endeffector-config
+
+Before launching the controller make sure the surgical drill is attached securley to the flansch of the Franka Emika Robot. Additionally the endeffector-config.json file needs to be updated on the FCI website. This can be done by selecting under the Settings tab in the End-Effector subpage. Select "other" in the drop down menu and upload the endeffector-config_med_drill.json file. Save the settings before you launch the controller.
+
+#### Controller launching
+
+To use the orthopedic drilling controller launch the cartesian impedance controller, the user input client and if logging is wished the robot trajectory logger as well in individual terminals.
+
+    ros2 launch cartesian_impedance_control cartesian_impedance_controller.launch.py
     ros2 run cartesian_impedance_control user_input_client
     ros2 run robot_trajectory_logger robot_trajectory_logger
+
+
+#### Input server node
+
+The input server is needed to send commands to the cartesion impedance controller. Connect the foot pedal to the usb port of your computer to be able to switch between the free floating and drilling modes without the use of your keyboard. Once the the user input node and the cartesian impedance controller have been launched the robot will move to it's reference position. 
     #3 --> #1: Free float is aktiviert und du kannst so positionieren wie du möchtest.
     #4 --> #1: Pose wird gehalten und orientierung angepasst zum Bohren
     #5 --> #1: K angepasst in z-richtung. Kannst nun Bohren und wird bei accel threshold von 0.1 stoppen
