@@ -36,7 +36,6 @@ It is still possible to use the keyboard to activate individual tasks over the i
     #4 --> #2: Drilling controller deactivated. Robot has returned to free floating mode and drill can be removed from bone and placed to next drilling position
     #4 --> #1: Activate drilling mode again if wished.
 
-The drilling controller will restrict 
 ### ROS2 cartesian_impedance_controller from Pd|Z
 
 Prerequisites:
