@@ -379,8 +379,6 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     }
     
     if (projection_matrix_decrease_set == false){
-      
-      // K_original = K;
 
       // determine relative rotation
       relative_rotation = orientation*rotation_ref.inverse();
@@ -509,6 +507,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   // when not in drilling mode we use the damoing term to be critically damped and dependant on K
   // TODO: Potentially add accel_trigger bool so if triggered we go back to the dynaic damping term which is dependant on K
+  // !!! Drill activation bool commented out in user_input_client.cpp. Needs to be commented in in switch case if adaptive dampening wants to be used !!!
   if (drill_act){ 
     D.diagonal()[2] = D_drilling_target; // this is in drilling mode
     
