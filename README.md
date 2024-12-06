@@ -4,7 +4,7 @@
 
 #### Endeffector-config
 
-Before launching the controller make sure the surgical drill is attached securley to the flansch of the Franka Emika Robot. Additionally the endeffector-config.json file needs to be updated on the FCI website. This can be done by selecting under the Settings tab in the End-Effector subpage. Select "other" in the drop down menu and upload the endeffector-config_med_drill.json file. Save the settings before you launch the controller.
+Before launching the controller make sure the surgical drill is attached securley to the flansch of the Franka Emika Robot. Additionally the endeffector-config.json file needs to be updated on the FCI website. This can be done by selecting under the Settings tab in the End-Effector subpage. Select "other" in the drop down menu and upload the [endeffector-config_med_drill.json](endeffector-config_med_drill.json) file. Save the settings before you launch the controller.
 
 #### Controller launching
 
