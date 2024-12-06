@@ -4,11 +4,11 @@
 
 #### Endeffector-config
 
-Before launching the controller make sure the surgical drill is attached securley to the flansch of the Franka Emika Robot. Additionally the endeffector-config.json file needs to be updated on the FCI website. This can be done by selecting under the Settings tab in the End-Effector subpage. Select "other" in the drop down menu and upload the [endeffector-config_med_drill.json](endeffector-config_med_drill.json) file. Save the settings before you launch the controller.
+Before launching the controller make sure the surgical drill is attached securley to the flansch of the Franka Emika Robot. Additionally the endeffector configuration needs to be updated on the FCI website. This can be done by selecting under the Settings tab in the End-Effector subpage. Select "other" in the drop down menu and upload the [endeffector-config_med_drill.json](endeffector-config_med_drill.json) file. Save the settings before you launch the controller.
 
 #### Controller launching
 
-To use the orthopedic drilling controller launch the cartesian impedance controller, the user input client and if logging is wished the robot trajectory logger as well in individual terminals.
+To use the orthopedic drilling controller launch the cartesian impedance controller, the user input client and if logging is wished the robot trajectory logger as well in individual terminals. 
 
     ros2 launch cartesian_impedance_control cartesian_impedance_controller.launch.py
     ros2 run cartesian_impedance_control user_input_client
@@ -17,14 +17,26 @@ To use the orthopedic drilling controller launch the cartesian impedance control
 
 #### Input server node
 
-The input server is needed to send commands to the cartesion impedance controller. Connect the foot pedal to the usb port of your computer to be able to switch between the free floating and drilling modes without the use of your keyboard. Once the the user input node and the cartesian impedance controller have been launched the robot will move to it's reference position. 
-    #3 --> #1: Free float is aktiviert und du kannst so positionieren wie du möchtest.
-    #4 --> #1: Pose wird gehalten und orientierung angepasst zum Bohren
-    #5 --> #1: K angepasst in z-richtung. Kannst nun Bohren und wird bei accel threshold von 0.1 stoppen
-    #6 --> #1: activate logging
+The input server is needed to send commands to the cartesion impedance controller. Connect the foot pedal to the usb port of your computer to be able to switch between the free floating and drilling modes without the use of your keyboard. Once the the user input node and the cartesian impedance controller have been launched the robot will move to it's reference position. By tapping on the foot pedal once, the robot will enter free floating mode. You can now place the end-effector in your desired drilling position. Next press on the foot pedal and the drilling controller will be started. If you wish to log the data from the drilling procedure make sure that you have activated the log file. 
+
+    1) Press on foot pedal to activate free floating mode and move end-effector to deired position
+    2) Press on foot pedal to activate drilling controller. Robot will allow movement along drilling axis and restrain movement deviating from it.
+    #5 --> #1: activate logging
     START DRILLING
-    #6 --> #2: stop drilling wehn you're done
-    
+    #5 --> #2: stop logging once outlier has been triggerd
+    3) Press on foot pedal to deactivate drilling controller and reenter free floating mode
+
+It is still possible to use the keyboard to activate individual tasks over the input server node.
+
+    #3 --> #1: Free floating mode actived. Place the end-effector in desires position
+    #4 --> #1: Stiffness adapted in drilling direction. Robot will allow movement along drilling axis and restrain movement deviating from it.
+    #5 --> #1: activate logging
+    START DRILLING
+    #5 --> #2: stop logging once outlier has been triggerd
+    #4 --> #2: Drilling controller deactivated. Robot has returned to free floating mode and drill can be removed from bone and placed to next drilling position
+    #4 --> #1: Activate drilling mode again if wished.
+
+The drilling controller will restrict 
 ### ROS2 cartesian_impedance_controller from Pd|Z
 
 Prerequisites:
