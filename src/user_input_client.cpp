@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
 
                 break;
             }
-            
+
             case 2:{
 
                 activation_request->controller_activation = true;
@@ -98,6 +98,14 @@ int main(int argc, char **argv) {
                     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Sum: %d", activation_result.get()->success);
                 } else {
                     RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Failed to call service controllerActivation");
+                }
+
+                planner_request->command = "a";
+                auto planner_result = planner_client->async_send_request(planner_request);
+                if(rclcpp::spin_until_future_complete(node, planner_result) ==  rclcpp::FutureReturnCode::SUCCESS){
+                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Sum: %d", planner_result.get()->success);
+                } else {
+                    RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Failed to call service plannerService");
                 }
 
                 break;
@@ -112,6 +120,14 @@ int main(int argc, char **argv) {
                     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Sum: %d", activation_result.get()->success);
                 } else {
                     RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Failed to call service controllerActivation");
+                }
+
+                planner_request->command = "d";
+                auto planner_result = planner_client->async_send_request(planner_request);
+                if(rclcpp::spin_until_future_complete(node, planner_result) ==  rclcpp::FutureReturnCode::SUCCESS){
+                    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Sum: %d", planner_result.get()->success);
+                } else {
+                    RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Failed to call service plannerService");
                 }
 
                 step_counter = 1;

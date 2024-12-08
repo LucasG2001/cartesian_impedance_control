@@ -223,7 +223,7 @@ public:
     double target_dampening = 0.0;
     double target_drill_force_ = 0.0;
     double sum_drill_force_ = 0.0;
-    double K_increase_gain = 2.15;
+    double K_increase_gain = 2.1;
     double trigger_counter = 0.0;
 
     double alpha = 0.0;
