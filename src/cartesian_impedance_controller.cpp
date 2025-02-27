@@ -167,12 +167,15 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     }
 
   // Initialize publisher here
-  jacobian_ee_publisher_ = get_node()->create_publisher<messages_fr3::msg::JacobianEE>("/jacobian_ee", 10);
-  dt_Fext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/dt_fext_z", 10);
-  D_z_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/D_z", 10);
-  VelocityErrorPublisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/velocity_error", 10);
-  pose_direction_publisher_ = get_node()->create_publisher<messages_fr3::msg::PoseDirection>("/pose_direction", 10);
-  F_ext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/fext_desired", 10);
+  jacobian_ee_publisher_ = get_node()->create_publisher<messages_fr3::msg::JacobianEE>("/jacobian_ee", 1);
+  dt_Fext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/dt_fext_z", 1);
+  D_z_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/D_z", 1);
+  VelocityErrorPublisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/velocity_error", 1);
+  pose_direction_publisher_ = get_node()->create_publisher<messages_fr3::msg::PoseDirection>("/pose_direction", 1);
+  F_ext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/fext_desired", 1);
+  velocity_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/velocity_desired", 1);
+  position_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/position_desired", 1);
+  
 
   // Initialize subscriber here
   joint_config_subscriber_ = get_node()->create_subscription<messages_fr3::msg::JointConfig>(
@@ -282,6 +285,27 @@ void CartesianImpedanceController::calculate_dt_f_ext(double delta_time, double 
     dt_Fext_desired_publisher_->publish(dt_F_ext_desired_msg);
 }
 
+void CartesianImpedanceController::calc_velocity_desired(double delta_time, Eigen::Vector3d position, Eigen::Vector3d desired_direction){
+
+  // Calculate the velocity vector (finite difference)
+  velocity = (position - previous_position) / delta_time;
+
+  // Get the velocity in the desired direction (dot product)
+  velocity_desired = velocity.dot(desired_direction);
+  
+  //std::cout << "velocity" << velocity << std::endl;
+  //std::cout << "velocity_desired" << velocity_desired << std::endl;
+  //std::cout << "desired_direction" << desired_direction << std::endl;
+
+  // Publish desired velocity
+  std_msgs::msg::Float64 velocity_desired_msg;
+  velocity_desired_msg.data = velocity_desired;
+  velocity_desired_publisher_->publish(velocity_desired_msg);
+
+  previous_position = position;
+
+}
+
 void CartesianImpedanceController::update_joint_config(Eigen::Quaterniond orientation_d, Eigen::Vector3d position_d, Eigen::Vector3d direction_d){
 
     // convert orientation to euler angles
@@ -338,18 +362,10 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   position = transform.translation();
   orientation = transform.rotation();
 
-  double z_position = position.z();
-  double previous_z_position = z_position;
-
   // Calculate the Jacobian derivative using finite differences
   Eigen::Matrix<double, 6, 7> jacobian_EE_derivative;
   
   updateJointStates();
-
-  calculate_accel_pose(dt, z_position);
-  
-  // Update previous z position for the next iteration
-  previous_z_position_ = z_position;
 
   // in free float mode we do not control the robot but to not have a jump in orientation when reactivated we set the desired orientation to the current one
   if (mode_ && !control_act){
@@ -426,36 +442,19 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   // set the direction of F_ext to align with the current drilling direction
   double F_ext_desired = O_F_ext_hat_K_M.head(3).dot(direction_current);
   double previous_F_ext_desired = F_ext_desired;
+  position_desired = position.dot(direction_current);
+
+  // publish of the desired position
+  std_msgs::msg::Float64 position_desired_msg;
+  position_desired_msg.data = position_desired;
+  position_desired_publisher_->publish(position_desired_msg);
+
 
   calculate_dt_f_ext(dt,F_ext_desired);
 
-  // save the position when the drill is activated
-  if (drill_act && drill_start_posistion_set == false){
-    drill_start_position = position;
-    drill_start_posistion_set = true;
-  }
-
-  // save all the velocities from start point of drilling into an array
-  if (drill_start_posistion_set && target_drill_velocity_set == false){
-    drill_velocities_.push_back(z_velocity);
-    drill_forces_.push_back(F_ext_desired);
-
-    // once we have drilled 1cm take the average of the drill velocities and set this to the target velocity
-    if (drill_start_position.z() - position.z() > 0.005){
-      sum_drill_velocity_ = std::accumulate(drill_velocities_.begin(), drill_velocities_.end(), 0.0);
-      sum_drill_force_ = std::accumulate(drill_forces_.begin(), drill_forces_.end(), 0.0);
-      target_drill_force_ = sum_drill_force_ / drill_forces_.size();
-      target_dampening = target_drill_force_ / target_drill_velocity_;
-      target_drill_velocity_set = true;
-    }
-  }
+  calculate_accel_pose(dt, position.z());
   
-  velocity_error = target_drill_velocity_ - z_velocity;
-
-  // publish velocity error
-  std_msgs::msg::Float64 velocity_error_msg;
-  velocity_error_msg.data = velocity_error;
-  VelocityErrorPublisher_->publish(velocity_error_msg);
+  calc_velocity_desired(dt, position, direction_current);
 
   // When external force is below threshold, allow trigger detection
   if (dt_F_ext_desired > -4300 && trigger_counter < 2) {
@@ -476,8 +475,6 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   }
 
-  ramping_active_ = false; // !!!removing ramping for testing purposes!!!
-
   if (ramping_active_) {
         time_constant = 0.001; // Adjust this to control the response speed
         alpha = 1.0 - exp(-period.seconds() / time_constant);
@@ -497,7 +494,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   if (position_set_){
       position_d_ = position_accel_lim; // setting breakthrough position
-      D_gain = 2.05;
+      D_gain = 2;
   }
 
   error.head(3) << position - position_d_;
@@ -515,42 +512,6 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   
   D.topRightCorner(3,3).setZero();
   D.bottomLeftCorner(3,3).setZero();
-
-  // when not in drilling mode we use the damoing term to be critically damped and dependant on K
-  // TODO: Potentially add accel_trigger bool so if triggered we go back to the dynaic damping term which is dependant on K
-  // !!! Drill activation bool commented out in user_input_client.cpp. Needs to be commented in in switch case if adaptive dampening wants to be used !!!
-  if (drill_act){ 
-    D.diagonal()[2] = D_drilling_target; // this is in drilling mode
-    
-    // increase D to maintain target velocity
-    if (target_drill_velocity_set && abs(dt_F_ext_desired) > 5000){
-      brake_through = true;
-    }
-
-    if (brake_through){
-      // Calculate the integral of the velocity error
-      velocity_error_sum += velocity_error * dt;
-
-      target_D_z = D_drilling_target + Kp_drilling * velocity_error + Ki_drilling * velocity_error_sum - Kd_drilling * z_acceleration;
-
-      target_D_z = std::max(target_D_z, 0.0);
-
-      // Define the time constant for exponential response
-      time_constant_D = 0.01; // Adjust this for ramping speed
-      alpha_D = 1.0 - exp(-dt / time_constant_D); // Calculate smoothing factor
-
-      // Smoothly adjust D.diagonal()[2] toward the changing target_D_z
-      D.diagonal()[2] = (alpha_D * abs(target_dampening) + (1.0 - alpha_D) * D.diagonal()[2]) * sqrt(Lambda.diagonal()[2]);
-      D.diagonal()[2] = 600;
-      // Clamp the value of D.diagonal()[2] to min_D and max_D
-      //D.diagonal()[2] = std::clamp(D.diagonal()[2], min_D, max_D);
-    }
-  }
-
-  // publish D_z
-  std_msgs::msg::Float64 D_z_msg;
-  D_z_msg.data = D.diagonal()[2];
-  D_z_publisher_->publish(D_z_msg);
 
   F_impedance = -1 * (D * (jacobian * dq_) + K * error );     
 
@@ -604,7 +565,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     // print the phrobenius norm of the K
     //std::cout << "K_norm: " << K.norm() << std::endl;
     // std::cout << "Drilling actived: " << drill_act << std::endl;
-    std::cout << "Stiffness:\n " << K << std::endl;
+    // std::cout << "Stiffness:\n " << K << std::endl;
     //std::cout << "Damping:\n " << D << std::endl;
     //std::cout << " F_impedance: " << F_impedance << std::endl;
     // std::cout << "Damping_z:\n " << D.diagonal()[2] << std::endl;
@@ -619,14 +580,18 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     /* std::cout << "elapsed_time:\n " << elapsed_time << std::endl; */
     std::cout << "dt_fext_desired:\n " << dt_F_ext_desired << std::endl;
     //std::cout << "magnitude of direction_current:\n " << direction_current.norm() << std::endl;
-    std::cout << "joint_config:\n " << joint_config << std::endl;
+    /* std::cout << "joint_config:\n " << joint_config << std::endl;
     std::cout << "tau_nullspace:\n " << tau_nullspace << std::endl;
     std::cout << "free floating mode: " << mode_ << std::endl;
     std::cout << "tau_d:\n" << tau_d << std::endl;
     std::cout << "F_impedance:\n" << F_impedance << std::endl;
     std::cout << "Damping:\n" << D << std::endl;
     std::cout << "Mass:\n" << M << std::endl;
-    std::cout << "Lambda:\n" << Lambda << std::endl;
+    std::cout << "Lambda:\n" << Lambda << std::endl; */
+    std::cout << "velocity_desired:\n" << velocity_desired << std::endl;
+    std::cout << "position" << position << std::endl;
+    std::cout << "previous_position" << previous_position << std::endl;
+    
   }
   outcounter++;
   update_stiffness_and_references();

@@ -98,6 +98,8 @@ public:
     rclcpp::Publisher<messages_fr3::msg::PoseDirection>::SharedPtr pose_direction_publisher_;
     rclcpp::Subscription<messages_fr3::msg::JointConfig>::SharedPtr joint_config_subscriber_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr F_ext_desired_publisher_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr velocity_desired_publisher_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr position_desired_publisher_;
 
 
     //Functions
@@ -108,6 +110,7 @@ public:
     void arrayToMatrix(const std::array<double, 6>& inputArray, Eigen::Matrix<double, 6, 1>& resultMatrix);
     void arrayToMatrix(const std::array<double, 7>& inputArray, Eigen::Matrix<double, 7, 1>& resultMatrix);
     void calculate_accel_pose(double delta_time, double z_position);
+    void calc_velocity_desired(double delta_time, Eigen::Vector3d position, Eigen::Vector3d desired_direction);
     void calculate_dt_f_ext(double delta_time, double F_ext_desired);
     void update_joint_config(Eigen::Quaterniond orientation_d, Eigen::Vector3d position_d, Eigen::Vector3d direction_d);
     void jointConfigCallback(const messages_fr3::msg::JointConfig::SharedPtr msg);
@@ -124,7 +127,10 @@ public:
     Eigen::Matrix<double, 7, 1> q_;
     Eigen::Matrix<double, 7, 1> dq_;
     Eigen::Matrix<double, 7, 1> dq_prev_;
-    Eigen::MatrixXd jacobian_transpose_pinv;  
+    Eigen::MatrixXd jacobian_transpose_pinv; 
+    Eigen::Vector3d velocity;
+    Eigen::Vector3d previous_position = Eigen::Vector3d::Zero();
+    
 
     //Robot parameters
     const int num_joints = 7;
@@ -226,6 +232,8 @@ public:
     double sum_drill_force_ = 0.0;
     double K_increase_gain = 2.1;
     double trigger_counter = 0.0;
+    double velocity_desired = 0.0;
+    double position_desired = 0.0;
 
     double alpha = 0.0;
     double time_constant = 0.0;
