@@ -186,8 +186,12 @@ public:
     Eigen::Quaterniond orientation_d_target_;
     Eigen::Quaterniond orientation;
     Eigen::Vector3d position;
+    Eigen::Matrix3d projection_drilling;
+    Eigen::Matrix3d projection_orthogonal;
     Eigen::Matrix<double, 6, 6> projection_matrix_decrease;
     Eigen::Matrix<double, 6, 6> projection_matrix_increase;
+    Eigen::Matrix<double, 6, 6> projection_matrix_decrease_orthogonal;
+    Eigen::Matrix<double, 6, 6> projection_matrix_increase_orthogonal;
     Eigen::Matrix3d target_K;
     Eigen::Vector3d direction_current;
     Eigen::Vector3d position_d_;
@@ -234,6 +238,7 @@ public:
     double trigger_counter = 0.0;
     double velocity_desired = 0.0;
     double position_desired = 0.0;
+    double K_increase_gain_orthogonal = 7;
 
     double alpha = 0.0;
     double time_constant = 0.0;

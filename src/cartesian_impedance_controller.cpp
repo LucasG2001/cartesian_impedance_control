@@ -425,13 +425,24 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
         joint_optimization_set = true;
       }
 
+      projection_drilling = direction_current * direction_current.transpose();
+      projection_orthogonal = Eigen::Matrix3d::Identity() - projection_drilling;
+
       // calculate projection matrices for stiffness adaptation
-      projection_matrix_decrease.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() - direction_current * direction_current.transpose();
-      projection_matrix_increase.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() + K_increase_gain*(direction_current * direction_current.transpose());
+      projection_matrix_decrease.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() - projection_drilling;
+      
+      projection_matrix_increase.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() + K_increase_gain*projection_drilling;
+
+      projection_matrix_increase_orthogonal.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() + K_increase_gain_orthogonal * projection_orthogonal;
+
+      projection_matrix_decrease_orthogonal.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() - projection_orthogonal;
+
       projection_matrix_decrease.bottomRightCorner(3,3) = Eigen::Matrix3d::Identity();
       projection_matrix_increase.bottomRightCorner(3,3) = Eigen::Matrix3d::Identity();
+      projection_matrix_increase_orthogonal.bottomRightCorner(3,3) = Eigen::Matrix3d::Identity();
+      projection_matrix_decrease_orthogonal.bottomRightCorner(3,3) = Eigen::Matrix3d::Identity();
 
-      K.topLeftCorner(3,3) = projection_matrix_decrease.topLeftCorner(3,3) * K_original.topLeftCorner(3,3);
+      K.topLeftCorner(3,3) =  projection_matrix_increase_orthogonal.topLeftCorner(3,3) * projection_matrix_decrease.topLeftCorner(3,3) * K_original.topLeftCorner(3,3);
       
       projection_matrix_decrease_set = true;
 
@@ -480,7 +491,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
         alpha = 1.0 - exp(-period.seconds() / time_constant);
 
         // Calculate the target stiffness value
-        target_K = projection_matrix_increase.topLeftCorner(3,3) * K_original.topLeftCorner(3,3);
+        target_K = projection_matrix_decrease_orthogonal.topLeftCorner(3,3) * projection_matrix_increase.topLeftCorner(3,3) * K_original.topLeftCorner(3,3);
         
         // Gradually increase K.diagonal()[2] towards the target value
         K.topLeftCorner(3,3) = alpha * target_K + (1.0 - alpha) * K.topLeftCorner(3,3);
