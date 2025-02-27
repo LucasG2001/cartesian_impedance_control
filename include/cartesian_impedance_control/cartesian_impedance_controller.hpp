@@ -97,6 +97,7 @@ public:
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr VelocityErrorPublisher_;
     rclcpp::Publisher<messages_fr3::msg::PoseDirection>::SharedPtr pose_direction_publisher_;
     rclcpp::Subscription<messages_fr3::msg::JointConfig>::SharedPtr joint_config_subscriber_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr F_ext_desired_publisher_;
 
 
     //Functions

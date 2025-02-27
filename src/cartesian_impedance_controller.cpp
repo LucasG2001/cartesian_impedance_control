@@ -172,6 +172,7 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
   D_z_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/D_z", 10);
   VelocityErrorPublisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/velocity_error", 10);
   pose_direction_publisher_ = get_node()->create_publisher<messages_fr3::msg::PoseDirection>("/pose_direction", 10);
+  F_ext_desired_publisher_ = get_node()->create_publisher<std_msgs::msg::Float64>("/fext_desired", 10);
 
   // Initialize subscriber here
   joint_config_subscriber_ = get_node()->create_subscription<messages_fr3::msg::JointConfig>(
@@ -269,6 +270,11 @@ void CartesianImpedanceController::calculate_dt_f_ext(double delta_time, double 
 
     // Update previous dt_F_ext_desired for the next iteration
     previous_dt_F_ext_desired = dt_F_ext_desired;
+
+    // Publish F_ext_desired
+    std_msgs::msg::Float64 F_ext_desired_msg;
+    F_ext_desired_msg.data = F_ext_desired;
+    F_ext_desired_publisher_->publish(F_ext_desired_msg);
 
     // Publish the jointEEState message
     std_msgs::msg::Float64 dt_F_ext_desired_msg;
@@ -376,6 +382,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
       position_d_ = position;
 
       drill_position_set = true;
+      
     }
     
     if (projection_matrix_decrease_set == false){
@@ -402,6 +409,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
         joint_optimization_set = true;
       }
 
+      // calculate projection matrices for stiffness adaptation
       projection_matrix_decrease.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() - direction_current * direction_current.transpose();
       projection_matrix_increase.topLeftCorner(3,3) = Eigen::Matrix3d::Identity() + K_increase_gain*(direction_current * direction_current.transpose());
       projection_matrix_decrease.bottomRightCorner(3,3) = Eigen::Matrix3d::Identity();
@@ -415,6 +423,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   }
 
+  // set the direction of F_ext to align with the current drilling direction
   double F_ext_desired = O_F_ext_hat_K_M.head(3).dot(direction_current);
   double previous_F_ext_desired = F_ext_desired;
 
@@ -443,7 +452,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   
   velocity_error = target_drill_velocity_ - z_velocity;
 
-  // publish velicity error
+  // publish velocity error
   std_msgs::msg::Float64 velocity_error_msg;
   velocity_error_msg.data = velocity_error;
   VelocityErrorPublisher_->publish(velocity_error_msg);
@@ -466,6 +475,8 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     }
 
   }
+
+  ramping_active_ = false; // !!!removing ramping for testing purposes!!!
 
   if (ramping_active_) {
         time_constant = 0.001; // Adjust this to control the response speed
