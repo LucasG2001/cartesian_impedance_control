@@ -272,7 +272,7 @@ void CartesianImpedanceController::calculate_dt_f_ext(double delta_time, double 
     dt_F_ext_desired = 0.1 * dt_F_ext_desired + 0.9 * previous_dt_F_ext_desired;
 
     // Update previous dt_F_ext_desired for the next iteration
-    previous_dt_F_ext_desired = dt_F_ext_desired;
+    previous_F_ext_desired = F_ext_desired;
 
     // Publish F_ext_desired
     std_msgs::msg::Float64 F_ext_desired_msg;
@@ -452,7 +452,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   // set the direction of F_ext to align with the current drilling direction
   double F_ext_desired = O_F_ext_hat_K_M.head(3).dot(direction_current);
-  double previous_F_ext_desired = F_ext_desired;
+  //double previous_F_ext_desired = F_ext_desired;
   position_desired = position.dot(direction_current);
 
   // publish of the desired position
@@ -468,11 +468,11 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   calc_velocity_desired(dt, position, direction_current);
 
   // When external force is below threshold, allow trigger detection
-  if (dt_F_ext_desired > -4300 && trigger_counter < 2) {
+  if (F_ext_desired > -3 && trigger_counter < 2) {
     accel_trigger = false;
   }
 
-  if (dt_F_ext_desired < -4500 && control_act && accel_trigger == false) {
+  if (F_ext_desired < -3 && control_act && accel_trigger == false) {
     
     trigger_counter += 1;
     accel_trigger = true;
