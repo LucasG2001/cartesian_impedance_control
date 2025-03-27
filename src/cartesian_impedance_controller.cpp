@@ -468,7 +468,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   calc_velocity_desired(dt, position, direction_current);
 
   // When external force is below threshold, allow trigger detection
-  if (F_ext_desired > -3 && trigger_counter < 2) {
+  if (F_ext_desired > -2.6 && trigger_counter < 2) {
     accel_trigger = false;
   }
 
