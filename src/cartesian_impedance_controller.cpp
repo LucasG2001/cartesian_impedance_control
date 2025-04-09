@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <cartesian_impedance_control/cartesian_impedance_controller.hpp>
+#include <cartesian_impedance_control/robot_utils.hpp>
 
 #include <cassert>
 #include <cmath>
