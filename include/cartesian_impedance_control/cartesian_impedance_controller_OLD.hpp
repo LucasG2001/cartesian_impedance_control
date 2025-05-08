@@ -36,26 +36,19 @@
 
 #include <controller_interface/controller_interface.hpp>
 
-// #include <franka/model.h>
-// #include <franka/robot.h>
-// #include <franka/robot_state.h>
+#include <franka/model.h>
+#include <franka/robot.h>
+#include <franka/robot_state.h>
 
-// #include "franka_hardware/franka_hardware_interface.hpp"
-// #include <franka_hardware/model.hpp>
+#include "franka_hardware/franka_hardware_interface.hpp"
+#include <franka_hardware/model.hpp>
 
 #include "franka_msgs/msg/franka_robot_state.hpp"
 #include "franka_msgs/msg/errors.hpp"
 #include "messages_fr3/srv/set_pose.hpp"
 
-// #include "franka_semantic_components/franka_robot_model.hpp"
-// #include "franka_semantic_components/franka_robot_state.hpp"
-
-#include <pinocchio/parsers/urdf.hpp>
-#include <pinocchio/algorithm/kinematics.hpp>
-#include <pinocchio/algorithm/crba.hpp>
-#include <pinocchio/algorithm/rnea.hpp>
-#include <pinocchio/algorithm/frames.hpp>
-#include <pinocchio/algorithm/jacobian.hpp>
+#include "franka_semantic_components/franka_robot_model.hpp"
+#include "franka_semantic_components/franka_robot_state.hpp"
 
 #define IDENTITY Eigen::MatrixXd::Identity(6, 6)
 
@@ -91,7 +84,7 @@ public:
 
  private:
     //Nodes
-    //rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr franka_state_subscriber = nullptr;
+    rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr franka_state_subscriber = nullptr;
     rclcpp::Service<messages_fr3::srv::SetPose>::SharedPtr pose_srv_;
 
 
@@ -120,14 +113,8 @@ public:
     const std::string robot_name_{"fr3"};
     const std::string k_robot_state_interface_name{"robot_state"};
     const std::string k_robot_model_interface_name{"robot_model"};
-    // franka_hardware::FrankaHardwareInterface interfaceClass;
-    
-    // The URDF (Unified Robot Description Format) file describes the robot's structure, including its links, joints, and physical properties.
-    pinocchio::Model model_;
-    pinocchio::Data data_;
-    // std::string urdf_path_ = "/home/matteo/franka_ros2_ws/src/franka_description/robots/fr3/fr3.urdf"; // Path to your robot's URDF file
-    int end_effector_frame_id_; // Frame ID for the end-effector
-
+    franka_hardware::FrankaHardwareInterface interfaceClass;
+    std::unique_ptr<franka_semantic_components::FrankaRobotModel> franka_robot_model_;
     const double delta_tau_max_{1.0};
     const double dt = 0.001;
                 

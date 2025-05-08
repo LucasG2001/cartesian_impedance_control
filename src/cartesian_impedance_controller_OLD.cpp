@@ -22,13 +22,6 @@
 
 #include <Eigen/Eigen>
 
-#include <pinocchio/parsers/urdf.hpp>
-#include <pinocchio/algorithm/kinematics.hpp>
-#include <pinocchio/algorithm/crba.hpp>
-#include <pinocchio/algorithm/rnea.hpp>
-#include <pinocchio/algorithm/frames.hpp>
-#include <pinocchio/algorithm/jacobian.hpp>
-
 namespace {
 
 template <class T, size_t N>
@@ -118,10 +111,10 @@ controller_interface::InterfaceConfiguration CartesianImpedanceController::state
     state_interfaces_config.names.push_back(robot_name_ + "_joint" + std::to_string(i) + "/velocity");
   }
 
-  // for (const auto& franka_robot_model_name : franka_robot_model_->get_state_interface_names()) {
-  //   state_interfaces_config.names.push_back(franka_robot_model_name);
-  //   std::cout << franka_robot_model_name << std::endl;
-  // }
+  for (const auto& franka_robot_model_name : franka_robot_model_->get_state_interface_names()) {
+    state_interfaces_config.names.push_back(franka_robot_model_name);
+    std::cout << franka_robot_model_name << std::endl;
+  }
 
   const std::string full_interface_name = robot_name_ + "/" + state_interface_name_;
 
@@ -137,76 +130,39 @@ CallbackReturn CartesianImpedanceController::on_init() {
 }
 
 
-// CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle::State& /*previous_state*/) {
-//   franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
-//   franka_semantic_components::FrankaRobotModel(robot_name_ + "/" + k_robot_model_interface_name,
-//                                                robot_name_ + "/" + k_robot_state_interface_name));
-                                               
-  // try {
-  //   rclcpp::QoS qos_profile(1); // Depth of the message queue
-  //   qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
-    // franka_state_subscriber = get_node()->create_subscription<franka_msgs::msg::FrankaRobotState>(
-    // "franka_robot_state_broadcaster/robot_state", qos_profile, 
-    // std::bind(&CartesianImpedanceController::topic_callback, this, std::placeholders::_1));
-//     std::cout << "Succesfully subscribed to robot_state_broadcaster" << std::endl;
-//   }
-
-//   catch (const std::exception& e) {
-//     fprintf(stderr,  "Exception thrown during publisher creation at configure stage with message : %s \n",e.what());
-//     return CallbackReturn::ERROR;
-//     }
-
-
-//   RCLCPP_DEBUG(get_node()->get_logger(), "configured successfully");
-//   return CallbackReturn::SUCCESS;
-// }
-
 CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle::State& /*previous_state*/) {
+  franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
+  franka_semantic_components::FrankaRobotModel(robot_name_ + "/" + k_robot_model_interface_name,
+                                               robot_name_ + "/" + k_robot_state_interface_name));
+                                               
   try {
-    // Retrieve the robot_description parameter
-    // This retrieves the robot_description parameter from the ROS 2 parameter server.
-    // If the parameter is not found, an error is logged, and the controller fails to configure.
-    std::string robot_description;
-    if (!get_node()->get_parameter("robot_description", robot_description)) {
-      RCLCPP_ERROR(get_node()->get_logger(), "Failed to retrieve 'robot_description' parameter.");
-      return CallbackReturn::ERROR;
-    }
-
-    // Parse the URDF using Pinocchio
-    //The robot_description parameter contains the URDF as a string.
-    //The buildModelFromXML function parses the URDF and initializes the Pinocchio model.
-    pinocchio::urdf::buildModelFromXML(robot_description, model_);
-    data_ = pinocchio::Data(model_);
-
-    // Set the end-effector frame ID
-    // Replace "panda_hand" with the name of your robot's end-effector frame as defined in the URDF.
-    // This frame is used for Cartesian impedance control.
-    end_effector_frame_id_ = model_.getFrameId("franka_hand"); // Replace "panda_hand" with your actual frame name
-    RCLCPP_INFO(get_node()->get_logger(), "Pinocchio model loaded successfully.");
-  } catch (const std::exception& e) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Failed to load Pinocchio model: %s", e.what());
-    return CallbackReturn::ERROR;
+    rclcpp::QoS qos_profile(1); // Depth of the message queue
+    qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+    franka_state_subscriber = get_node()->create_subscription<franka_msgs::msg::FrankaRobotState>(
+    "franka_robot_state_broadcaster/robot_state", qos_profile, 
+    std::bind(&CartesianImpedanceController::topic_callback, this, std::placeholders::_1));
+    std::cout << "Succesfully subscribed to robot_state_broadcaster" << std::endl;
   }
 
+  catch (const std::exception& e) {
+    fprintf(stderr,  "Exception thrown during publisher creation at configure stage with message : %s \n",e.what());
+    return CallbackReturn::ERROR;
+    }
+
+
+  RCLCPP_DEBUG(get_node()->get_logger(), "configured successfully");
   return CallbackReturn::SUCCESS;
 }
 
+
 CallbackReturn CartesianImpedanceController::on_activate(
   const rclcpp_lifecycle::State& /*previous_state*/) {
-  // franka_robot_model_->assign_loaned_state_interfaces(state_interfaces_);
+  franka_robot_model_->assign_loaned_state_interfaces(state_interfaces_);
 
-  // std::array<double, 16> initial_pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
-  // Eigen::Affine3d initial_transform(Eigen::Matrix4d::Map(initial_pose.data()));
-  // position_d_ = initial_transform.translation();
-  // orientation_d_ = Eigen::Quaterniond(initial_transform.rotation());
-  pinocchio::forwardKinematics(model_, data_, q_);
-  pinocchio::updateFramePlacements(model_, data_);
-  //Eigen::Affine3d initial_transform(data_.oMf[end_effector_frame_id_]);
-  Eigen::Affine3d transform;
-  transform.linear() = data_.oMf[end_effector_frame_id_].rotation();  // Extract rotation
-  transform.translation() = data_.oMf[end_effector_frame_id_].translation();  // Extract translation
-  position_d_ = transform.translation();
-  orientation_d_ = Eigen::Quaterniond(transform.rotation());
+  std::array<double, 16> initial_pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
+  Eigen::Affine3d initial_transform(Eigen::Matrix4d::Map(initial_pose.data()));
+  position_d_ = initial_transform.translation();
+  orientation_d_ = Eigen::Quaterniond(initial_transform.rotation());
   std::cout << "Completed Activation process" << std::endl;
   return CallbackReturn::SUCCESS;
 }
@@ -214,7 +170,7 @@ CallbackReturn CartesianImpedanceController::on_activate(
 
 controller_interface::CallbackReturn CartesianImpedanceController::on_deactivate(
   const rclcpp_lifecycle::State& /*previous_state*/) {
-  // franka_robot_model_->release_interfaces();
+  franka_robot_model_->release_interfaces();
   return CallbackReturn::SUCCESS;
 }
 
@@ -229,10 +185,10 @@ std::array<double, 6> CartesianImpedanceController::convertToStdArray(const geom
     return result;
 }
 
-// void CartesianImpedanceController::topic_callback(const std::shared_ptr<franka_msgs::msg::FrankaRobotState> msg) {
-//   O_F_ext_hat_K = convertToStdArray(msg->o_f_ext_hat_k);
-//   arrayToMatrix(O_F_ext_hat_K, O_F_ext_hat_K_M);
-// }
+void CartesianImpedanceController::topic_callback(const std::shared_ptr<franka_msgs::msg::FrankaRobotState> msg) {
+  O_F_ext_hat_K = convertToStdArray(msg->o_f_ext_hat_k);
+  arrayToMatrix(O_F_ext_hat_K, O_F_ext_hat_K_M);
+}
 
 void CartesianImpedanceController::updateJointStates() {
   for (auto i = 0; i < num_joints; ++i) {
@@ -256,28 +212,15 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //   std::cin >> mode_;
   // }
   // }
-
-  //std::array<double, 49> mass = franka_robot_model_->getMassMatrix();
-  //std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
-  //std::array<double, 42> jacobian_array =  franka_robot_model_->getZeroJacobian(franka::Frame::kEndEffector);
-  //std::array<double, 16> pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
-  //Eigen::Map<Eigen::Matrix<double, 7, 1>> coriolis(coriolis_array.data());
-  //Eigen::Map<Eigen::Matrix<double, 6, 7>> jacobian(jacobian_array.data());
-  //Eigen::Map<Eigen::Matrix<double, 7, 7>> M(mass.data());
-  //Eigen::Affine3d transform(Eigen::Matrix4d::Map(pose.data()));
-  //Eigen::Vector3d position(transform.translation());
-  //Eigen::Quaterniond orientation(transform.rotation());
-  Eigen::MatrixXd M = pinocchio::crba(model_, data_, q_);
-  Eigen::VectorXd coriolis = pinocchio::rnea(model_, data_, q_, dq_, Eigen::VectorXd::Zero(model_.nv));
-  Eigen::MatrixXd jacobian(6, model_.nv);
-  pinocchio::computeFrameJacobian(model_, data_, q_, end_effector_frame_id_, pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
-  pinocchio::forwardKinematics(model_, data_, q_);
-  pinocchio::updateFramePlacements(model_, data_);
-  //Eigen::Affine3d transform(data_.oMf[end_effector_frame_id_]);
-  Eigen::Affine3d transform;
-  transform.linear() = data_.oMf[end_effector_frame_id_].rotation();  // Extract rotation
-  transform.translation() = data_.oMf[end_effector_frame_id_].translation();  // Extract translation
-  Eigen::Vector3d position = transform.translation();
+  std::array<double, 49> mass = franka_robot_model_->getMassMatrix();
+  std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
+  std::array<double, 42> jacobian_array =  franka_robot_model_->getZeroJacobian(franka::Frame::kEndEffector);
+  std::array<double, 16> pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
+  Eigen::Map<Eigen::Matrix<double, 7, 1>> coriolis(coriolis_array.data());
+  Eigen::Map<Eigen::Matrix<double, 6, 7>> jacobian(jacobian_array.data());
+  Eigen::Map<Eigen::Matrix<double, 7, 7>> M(mass.data());
+  Eigen::Affine3d transform(Eigen::Matrix4d::Map(pose.data()));
+  Eigen::Vector3d position(transform.translation());
   Eigen::Quaterniond orientation(transform.rotation());
   orientation_d_target_ = Eigen::AngleAxisd(rotation_d_target_[0], Eigen::Vector3d::UnitX())
                         * Eigen::AngleAxisd(rotation_d_target_[1], Eigen::Vector3d::UnitY())
