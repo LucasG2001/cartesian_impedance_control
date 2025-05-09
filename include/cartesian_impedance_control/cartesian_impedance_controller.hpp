@@ -94,7 +94,9 @@ public:
     //rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr franka_state_subscriber = nullptr;
     rclcpp::Service<messages_fr3::srv::SetPose>::SharedPtr pose_srv_;
 
-
+    const int num_joints = 7;
+    const std::string robot_name_{"fr3"};
+    const std::string state_interface_name_{"robot_state"};
     //Functions
     void topic_callback(const std::shared_ptr<franka_msgs::msg::FrankaRobotState> msg);
     void updateJointStates();
@@ -115,9 +117,6 @@ public:
     Eigen::MatrixXd jacobian_transpose_pinv;  
 
     //Robot parameters
-    const int num_joints = 7;
-    const std::string state_interface_name_{"robot_state"};
-    const std::string robot_name_{"fr3"};
     const std::string k_robot_state_interface_name{"robot_state"};
     const std::string k_robot_model_interface_name{"robot_model"};
     // franka_hardware::FrankaHardwareInterface interfaceClass;

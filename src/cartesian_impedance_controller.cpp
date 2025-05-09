@@ -133,6 +133,7 @@ CallbackReturn CartesianImpedanceController::on_init() {
    UserInputServer input_server_obj(&position_d_target_, &rotation_d_target_, &K, &D, &T);
    std::thread input_thread(&UserInputServer::main, input_server_obj, 0, nullptr);
    input_thread.detach();
+   RCLCPP_INFO(get_node()->get_logger(), "on_init completed successfully.");
    return CallbackReturn::SUCCESS;
 }
 
@@ -163,6 +164,9 @@ CallbackReturn CartesianImpedanceController::on_init() {
 
 CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle::State& /*previous_state*/) {
   try {
+
+    RCLCPP_INFO(get_node()->get_logger(), "Starting on_configure...");
+
     // Retrieve the robot_description parameter
     // This retrieves the robot_description parameter from the ROS 2 parameter server.
     // If the parameter is not found, an error is logged, and the controller fails to configure.
@@ -172,11 +176,15 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
       return CallbackReturn::ERROR;
     }
 
+    RCLCPP_INFO(get_node()->get_logger(), "'robot_description' parameter retrieved successfully.");
+
     // Parse the URDF using Pinocchio
     //The robot_description parameter contains the URDF as a string.
     //The buildModelFromXML function parses the URDF and initializes the Pinocchio model.
     pinocchio::urdf::buildModelFromXML(robot_description, model_);
     data_ = pinocchio::Data(model_);
+    RCLCPP_INFO(get_node()->get_logger(), "Pinocchio model parsed successfully.");
+
 
     // Set the end-effector frame ID
     // Replace "panda_hand" with the name of your robot's end-effector frame as defined in the URDF.
@@ -187,12 +195,11 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to load Pinocchio model: %s", e.what());
     return CallbackReturn::ERROR;
   }
-
+  RCLCPP_INFO(get_node()->get_logger(), "on_configure completed successfully.");
   return CallbackReturn::SUCCESS;
 }
 
-CallbackReturn CartesianImpedanceController::on_activate(
-  const rclcpp_lifecycle::State& /*previous_state*/) {
+CallbackReturn CartesianImpedanceController::on_activate(const rclcpp_lifecycle::State& /*previous_state*/) {
   // franka_robot_model_->assign_loaned_state_interfaces(state_interfaces_);
 
   // std::array<double, 16> initial_pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
@@ -212,9 +219,9 @@ CallbackReturn CartesianImpedanceController::on_activate(
 }
 
 
-controller_interface::CallbackReturn CartesianImpedanceController::on_deactivate(
-  const rclcpp_lifecycle::State& /*previous_state*/) {
+controller_interface::CallbackReturn CartesianImpedanceController::on_deactivate(const rclcpp_lifecycle::State& /*previous_state*/) {
   // franka_robot_model_->release_interfaces();
+  RCLCPP_INFO(get_node()->get_logger(), "Controller deactivated.");
   return CallbackReturn::SUCCESS;
 }
 
@@ -256,7 +263,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //   std::cin >> mode_;
   // }
   // }
-
+  RCLCPP_INFO(get_node()->get_logger(), "update completed successfully.");
   //std::array<double, 49> mass = franka_robot_model_->getMassMatrix();
   //std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
   //std::array<double, 42> jacobian_array =  franka_robot_model_->getZeroJacobian(franka::Frame::kEndEffector);
