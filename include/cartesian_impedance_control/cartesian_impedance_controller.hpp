@@ -24,7 +24,8 @@
 #include <string>
 #include <unistd.h>
 #include <thread>
-#include <chrono>         
+#include <chrono>        
+#include <future> 
 
 #include "cartesian_impedance_control/user_input_server.hpp"
 
@@ -46,6 +47,7 @@
 #include "franka_msgs/msg/franka_robot_state.hpp"
 #include "franka_msgs/msg/errors.hpp"
 #include "messages_fr3/srv/set_pose.hpp"
+#include <std_msgs/msg/string.hpp>
 
 // #include "franka_semantic_components/franka_robot_model.hpp"
 // #include "franka_semantic_components/franka_robot_state.hpp"
@@ -91,9 +93,11 @@ public:
 
  private:
     //Nodes
+    //robot description
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_sub_;
+    std::promise<std::string> robot_description_promise_;
     //rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr franka_state_subscriber = nullptr;
     rclcpp::Service<messages_fr3::srv::SetPose>::SharedPtr pose_srv_;
-
     const int num_joints = 7;
     const std::string robot_name_{"fr3"};
     const std::string state_interface_name_{"robot_state"};

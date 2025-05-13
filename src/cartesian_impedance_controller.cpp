@@ -137,31 +137,6 @@ CallbackReturn CartesianImpedanceController::on_init() {
    return CallbackReturn::SUCCESS;
 }
 
-
-// CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle::State& /*previous_state*/) {
-//   franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
-//   franka_semantic_components::FrankaRobotModel(robot_name_ + "/" + k_robot_model_interface_name,
-//                                                robot_name_ + "/" + k_robot_state_interface_name));
-                                               
-  // try {
-  //   rclcpp::QoS qos_profile(1); // Depth of the message queue
-  //   qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
-    // franka_state_subscriber = get_node()->create_subscription<franka_msgs::msg::FrankaRobotState>(
-    // "franka_robot_state_broadcaster/robot_state", qos_profile, 
-    // std::bind(&CartesianImpedanceController::topic_callback, this, std::placeholders::_1));
-//     std::cout << "Succesfully subscribed to robot_state_broadcaster" << std::endl;
-//   }
-
-//   catch (const std::exception& e) {
-//     fprintf(stderr,  "Exception thrown during publisher creation at configure stage with message : %s \n",e.what());
-//     return CallbackReturn::ERROR;
-//     }
-
-
-//   RCLCPP_DEBUG(get_node()->get_logger(), "configured successfully");
-//   return CallbackReturn::SUCCESS;
-// }
-
 CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle::State& /*previous_state*/) {
   try {
 
@@ -171,13 +146,17 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     // This retrieves the robot_description parameter from the ROS 2 parameter server.
     // If the parameter is not found, an error is logged, and the controller fails to configure.
     std::string robot_description;
-    if (!get_node()->get_parameter("robot_description", robot_description)) {
-      RCLCPP_ERROR(get_node()->get_logger(), "Failed to retrieve 'robot_description' parameter.");
+    auto parameters_client = std::make_shared<rclcpp::AsyncParametersClient>(get_node(), "/robot_state_publisher");
+    parameters_client->wait_for_service();
+    auto future = parameters_client->get_parameters({"robot_description"});
+    auto result = future.get();
+    if (!result.empty()) {
+      robot_description = result[0].value_to_string();
+      RCLCPP_INFO(get_node()->get_logger(), "'robot_description' parameter retrieved successfully.");
+    } else {
+      RCLCPP_ERROR(get_node()->get_logger(), "Failed to get robot_description parameter.");
       return CallbackReturn::ERROR;
     }
-
-    RCLCPP_INFO(get_node()->get_logger(), "'robot_description' parameter retrieved successfully.");
-
     // Parse the URDF using Pinocchio
     //The robot_description parameter contains the URDF as a string.
     //The buildModelFromXML function parses the URDF and initializes the Pinocchio model.
@@ -186,12 +165,14 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     RCLCPP_INFO(get_node()->get_logger(), "Pinocchio model parsed successfully.");
 
 
-    // Set the end-effector frame ID
-    // Replace "panda_hand" with the name of your robot's end-effector frame as defined in the URDF.
-    // This frame is used for Cartesian impedance control.
-    end_effector_frame_id_ = model_.getFrameId("franka_hand"); // Replace "panda_hand" with your actual frame name
-    RCLCPP_INFO(get_node()->get_logger(), "Pinocchio model loaded successfully.");
-  } catch (const std::exception& e) {
+  
+    //// Set the end-effector frame ID
+    //// Replace "panda_hand" with the name of your robot's end-effector frame as defined in the URDF.
+    //// This frame is used for Cartesian impedance control.
+    //end_effector_frame_id_ = model_.getFrameId("franka_hand"); // Replace "panda_hand" with your actual frame name
+    //RCLCPP_INFO(get_node()->get_logger(), "Pinocchio model loaded successfully.");
+  } 
+  catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to load Pinocchio model: %s", e.what());
     return CallbackReturn::ERROR;
   }
@@ -263,7 +244,6 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //   std::cin >> mode_;
   // }
   // }
-  RCLCPP_INFO(get_node()->get_logger(), "update completed successfully.");
   //std::array<double, 49> mass = franka_robot_model_->getMassMatrix();
   //std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
   //std::array<double, 42> jacobian_array =  franka_robot_model_->getZeroJacobian(franka::Frame::kEndEffector);
@@ -357,21 +337,21 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   }
   
   if (outcounter % 1000/update_frequency == 0){
-    std::cout << "F_ext_robot [N]" << std::endl;
-    std::cout << O_F_ext_hat_K << std::endl;
-    std::cout << O_F_ext_hat_K_M << std::endl;
-    std::cout << "Lambda  Thetha.inv(): " << std::endl;
-    std::cout << Lambda*Theta.inverse() << std::endl;
-    std::cout << "tau_d" << std::endl;
-    std::cout << tau_d << std::endl;
-    std::cout << "--------" << std::endl;
-    std::cout << tau_nullspace << std::endl;
-    std::cout << "--------" << std::endl;
-    std::cout << tau_impedance << std::endl;
-    std::cout << "--------" << std::endl;
-    std::cout << coriolis << std::endl;
-    std::cout << "Inertia scaling [m]: " << std::endl;
-    std::cout << T << std::endl;
+    // std::cout << "F_ext_robot [N]" << std::endl;
+    // std::cout << O_F_ext_hat_K << std::endl;
+    // std::cout << O_F_ext_hat_K_M << std::endl;
+    // std::cout << "Lambda  Thetha.inv(): " << std::endl;
+    // std::cout << Lambda*Theta.inverse() << std::endl;
+    // std::cout << "tau_d" << std::endl;
+    // std::cout << tau_d << std::endl;
+    // std::cout << "--------" << std::endl;
+    // std::cout << tau_nullspace << std::endl;
+    // std::cout << "--------" << std::endl;
+    // std::cout << tau_impedance << std::endl;
+    // std::cout << "--------" << std::endl;
+    // std::cout << coriolis << std::endl;
+    // std::cout << "Inertia scaling [m]: " << std::endl;
+    // std::cout << T << std::endl;
   }
   outcounter++;
   update_stiffness_and_references();

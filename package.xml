@@ -16,6 +16,7 @@
   <depend>franka_msgs</depend>
   <depend>franka_semantic_components</depend>
   <depend>messages_fr3</depend>
+  <depend>pinocchio</depend>
 
 
   <exec_depend>franka_description</exec_depend>

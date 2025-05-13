@@ -27,6 +27,7 @@ find_package(generate_parameter_library)
 find_package(std_msgs REQUIRED)
 find_package(messages_fr3 REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(pinocchio REQUIRED)
 
 
 add_library(
@@ -60,6 +61,7 @@ pluginlib_export_plugin_description_file(
 
 add_executable(user_input_client src/user_input_client.cpp)
 target_link_libraries(user_input_client ${PROJECT_NAME})
+target_link_libraries(cartesian_impedance_control pinocchio::pinocchio)
 
 
 
