@@ -116,9 +116,12 @@ public:
     Eigen::Matrix<double, 7, 1> q_subscribed_M;
     Eigen::Matrix<double, 7, 1> tau_J_d_M = Eigen::MatrixXd::Zero(7, 1);
     Eigen::Matrix<double, 6, 1> O_F_ext_hat_K_M = Eigen::MatrixXd::Zero(6,1);
-    Eigen::Matrix<double, 7, 1> q_;
-    Eigen::Matrix<double, 7, 1> dq_;
+    Eigen::MatrixXd q_;
+    Eigen::MatrixXd dq_;
     Eigen::MatrixXd jacobian_transpose_pinv;  
+    Eigen::MatrixXd M;
+    Eigen::VectorXd coriolis;
+    Eigen::MatrixXd jacobian;
 
     //Robot parameters
     const std::string k_robot_state_interface_name{"robot_state"};
@@ -152,19 +155,6 @@ public:
                                                                 0,   0,   0,   0,   25,   0,
                                                                 0,   0,   0,   0,   0,   6).finished();
 
-    // Eigen::Matrix<double, 6, 6> K =  (Eigen::MatrixXd(6,6) << 250,   0,   0,   0,   0,   0,
-    //                                                             0, 250,   0,   0,   0,   0,
-    //                                                             0,   0, 250,   0,   0,   0,  // impedance stiffness term
-    //                                                             0,   0,   0,  80,   0,   0,
-    //                                                             0,   0,   0,   0,  80,   0,
-    //                                                             0,   0,   0,   0,   0,  10).finished();
-
-    // Eigen::Matrix<double, 6, 6> D =  (Eigen::MatrixXd(6,6) <<  30,   0,   0,   0,   0,   0,
-    //                                                             0,  30,   0,   0,   0,   0,
-    //                                                             0,   0,  30,   0,   0,   0,  // impedance damping term
-    //                                                             0,   0,   0,  18,   0,   0,
-    //                                                             0,   0,   0,   0,  18,   0,
-    //                                                             0,   0,   0,   0,   0,   9).finished();
     Eigen::Matrix<double, 6, 6> Theta = IDENTITY;
     Eigen::Matrix<double, 6, 6> T = (Eigen::MatrixXd(6,6) <<       1,   0,   0,   0,   0,   0,
                                                                    0,   1,   0,   0,   0,   0,
@@ -182,10 +172,6 @@ public:
     Eigen::Vector3d position_d_;
     Eigen::Quaterniond orientation_d_; 
     Eigen::Matrix<double, 6, 1> F_impedance;  
-    Eigen::Matrix<double, 6, 1> F_contact_des = Eigen::MatrixXd::Zero(6, 1);                 // desired contact force
-    Eigen::Matrix<double, 6, 1> F_contact_target = Eigen::MatrixXd::Zero(6, 1);              // desired contact force used for filtering
-    Eigen::Matrix<double, 6, 1> F_ext = Eigen::MatrixXd::Zero(6, 1);                         // external forces
-    Eigen::Matrix<double, 6, 1> F_cmd = Eigen::MatrixXd::Zero(6, 1);                         // commanded contact force
     Eigen::Matrix<double, 7, 1> q_d_nullspace_;
     Eigen::Matrix<double, 6, 1> error;                                                       // pose error (6d)
     double nullspace_stiffness_{0.001};
@@ -195,15 +181,6 @@ public:
     //Logging
     int outcounter = 0;
     const int update_frequency = 2; //frequency for update outputs
-
-    //Integrator
-    Eigen::Matrix<double, 6, 1> I_error = Eigen::MatrixXd::Zero(6, 1);                      // pose error (6d)
-    Eigen::Matrix<double, 6, 1> I_F_error = Eigen::MatrixXd::Zero(6, 1);                    // force error integral
-    Eigen::Matrix<double, 6, 1> integrator_weights = 
-      (Eigen::MatrixXd(6,1) << 75.0, 75.0, 75.0, 75.0, 75.0, 4.0).finished();
-    Eigen::Matrix<double, 6, 1> max_I = 
-      (Eigen::MatrixXd(6,1) << 30.0, 30.0, 30.0, 50.0, 50.0, 2.0).finished();
-
    
   
     std::mutex position_and_orientation_d_target_mutex_;

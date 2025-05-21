@@ -163,13 +163,11 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     pinocchio::urdf::buildModelFromXML(robot_description, model_);
     data_ = pinocchio::Data(model_);
     RCLCPP_INFO(get_node()->get_logger(), "Pinocchio model parsed successfully.");
-
-
   
     //// Set the end-effector frame ID
     //// Replace "panda_hand" with the name of your robot's end-effector frame as defined in the URDF.
     //// This frame is used for Cartesian impedance control.
-    //end_effector_frame_id_ = model_.getFrameId("franka_hand"); // Replace "panda_hand" with your actual frame name
+    end_effector_frame_id_ = model_.getFrameId("fr3_hand"); // Replace "panda_hand" with your actual frame name
     //RCLCPP_INFO(get_node()->get_logger(), "Pinocchio model loaded successfully.");
   } 
   catch (const std::exception& e) {
@@ -187,7 +185,12 @@ CallbackReturn CartesianImpedanceController::on_activate(const rclcpp_lifecycle:
   // Eigen::Affine3d initial_transform(Eigen::Matrix4d::Map(initial_pose.data()));
   // position_d_ = initial_transform.translation();
   // orientation_d_ = Eigen::Quaterniond(initial_transform.rotation());
-  pinocchio::forwardKinematics(model_, data_, q_);
+  std::cout << "Available frames in the model:" << std::endl;
+  for (const auto& frame : model_.frames) {
+  std::cout << frame.name << std::endl;
+  }
+  std::cout << "ANumber of available velocities:" << model_.nv << std::endl;
+  pinocchio::forwardKinematics(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished());
   pinocchio::updateFramePlacements(model_, data_);
   //Eigen::Affine3d initial_transform(data_.oMf[end_effector_frame_id_]);
   Eigen::Affine3d transform;
@@ -254,11 +257,14 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //Eigen::Affine3d transform(Eigen::Matrix4d::Map(pose.data()));
   //Eigen::Vector3d position(transform.translation());
   //Eigen::Quaterniond orientation(transform.rotation());
-  Eigen::MatrixXd M = pinocchio::crba(model_, data_, q_);
-  Eigen::VectorXd coriolis = pinocchio::rnea(model_, data_, q_, dq_, Eigen::VectorXd::Zero(model_.nv));
-  Eigen::MatrixXd jacobian(6, model_.nv);
-  pinocchio::computeFrameJacobian(model_, data_, q_, end_effector_frame_id_, pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
-  pinocchio::forwardKinematics(model_, data_, q_);
+  std::cout << "q_: " << q_.transpose() << std::endl;
+  //TODO: change references to q w.r.t pinocchio to be of dimension 9 or handle this mismatch otherwise
+  M = pinocchio::crba(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished());
+  std::cout << "M: " << M << std::endl;
+  coriolis = pinocchio::rnea(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished(), (Eigen::VectorXd(9) << dq_.head(7), 0.0, 0.0).finished(), Eigen::VectorXd::Zero(model_.nv));
+  pinocchio::computeFrameJacobian(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished(), end_effector_frame_id_, pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
+  std::cout << "Jacobian: " << jacobian << std::endl;
+  pinocchio::forwardKinematics(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished());
   pinocchio::updateFramePlacements(model_, data_);
   //Eigen::Affine3d transform(data_.oMf[end_effector_frame_id_]);
   Eigen::Affine3d transform;
@@ -280,55 +286,23 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   Eigen::Quaterniond error_quaternion(orientation.inverse() * orientation_d_);
   error.tail(3) << error_quaternion.x(), error_quaternion.y(), error_quaternion.z();
   error.tail(3) << -transform.rotation() * error.tail(3);
-  I_error += Sm * dt * integrator_weights.cwiseProduct(error);
-  for (int i = 0; i < 6; i++){
-    I_error(i,0) = std::min(std::max(-max_I(i,0),  I_error(i,0)), max_I(i,0)); 
-  }
 
-  Lambda = (jacobian * M.inverse() * jacobian.transpose()).inverse();
-  // Theta = T*Lambda;
-  // F_impedance = -1*(Lambda * Theta.inverse() - IDENTITY) * F_ext;
-  //Inertia of the robot
-  // remove the mode selection
-/*   switch (mode_)
-  {
-  case 1: */
-
-    Theta = Lambda;
-
+  Lambda = ((jacobian * M.inverse() * jacobian.transpose()).inverse()).topLeftCorner(6, 6);
     // correcting D to be critically damped
-    D =  D_gain* K.cwiseMax(0.0).cwiseSqrt() * Lambda.cwiseMax(0.0).diagonal().cwiseSqrt().asDiagonal();
+  D =  D_gain* K.cwiseMax(0.0).cwiseSqrt() * Lambda.cwiseMax(0.0).diagonal().cwiseSqrt().asDiagonal();
 
-    D.topRightCorner(3,3).setZero();
-    D.bottomLeftCorner(3,3).setZero();
-    
-    F_impedance = -1 * (D * (jacobian * dq_) + K * error /*+ I_error*/);
-/*  break;
+  F_impedance = -1 * (D * (jacobian.topLeftCorner(6,7) * dq_) + K * error);
 
-  case 2:
-    Theta = T*Lambda;
-    F_impedance = -1*(Lambda * Theta.inverse() - IDENTITY) * F_ext;
-    break;
-  
-  default:
-    break;
-  } */
+  Eigen::VectorXd tau_nullspace(7), tau_d(7), tau_impedance(7);
+  pseudoInverse(jacobian.topLeftCorner(6,7).transpose(), jacobian_transpose_pinv);
 
-  F_ext = 0.9 * F_ext + 0.1 * O_F_ext_hat_K_M; //Filtering 
-  I_F_error += dt * Sf* (F_contact_des - F_ext);
-  F_cmd = Sf*(0.4 * (F_contact_des - F_ext) + 0.9 * I_F_error + 0.9 * F_contact_des);
+  //tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) -
+  //                  jacobian.transpose() * jacobian_transpose_pinv) *
+  //                  (nullspace_stiffness_ * config_control * (q_d_nullspace_ - q_) - //if config_control = true we control the whole robot configuration
+  //                  (2.0 * sqrt(nullspace_stiffness_)) * dq_);  // if config control ) false we don't care about the joint position
 
-  Eigen::VectorXd tau_task(7), tau_nullspace(7), tau_d(7), tau_impedance(7);
-  pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv);
-
-  tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) -
-                    jacobian.transpose() * jacobian_transpose_pinv) *
-                    (nullspace_stiffness_ * config_control * (q_d_nullspace_ - q_) - //if config_control = true we control the whole robot configuration
-                    (2.0 * sqrt(nullspace_stiffness_)) * dq_);  // if config control ) false we don't care about the joint position
-
-  tau_impedance = jacobian.transpose() * Sm * (F_impedance /*+ F_repulsion + F_potential*/) + jacobian.transpose() * Sf * F_cmd;
-  auto tau_d_placeholder = tau_impedance + tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
-  tau_d << tau_d_placeholder;
+  tau_impedance = jacobian.topLeftCorner(6,7).transpose() * Sm * F_impedance; //+ jacobian.transpose() * Sf * F_cmd;
+  tau_d = tau_impedance + tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
   tau_d << saturateTorqueRate(tau_d, tau_J_d_M);  // Saturate torque rate to avoid discontinuities
   tau_J_d_M = tau_d;
 
@@ -336,20 +310,18 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     command_interfaces_[i].set_value(tau_d(i));
   }
   
-  if (outcounter % 1000/update_frequency == 0){
+  if (true/*outcounter % 1000/update_frequency == 0*/){
     // std::cout << "F_ext_robot [N]" << std::endl;
     // std::cout << O_F_ext_hat_K << std::endl;
     // std::cout << O_F_ext_hat_K_M << std::endl;
-    // std::cout << "Lambda  Thetha.inv(): " << std::endl;
-    // std::cout << Lambda*Theta.inverse() << std::endl;
-    // std::cout << "tau_d" << std::endl;
-    // std::cout << tau_d << std::endl;
+    std::cout << "Lambda: " << Lambda << std::endl;
+    std::cout << "tau_d: " << tau_d.transpose() << std::endl;
     // std::cout << "--------" << std::endl;
-    // std::cout << tau_nullspace << std::endl;
+    std::cout << "tau_nullspace: " << tau_nullspace.transpose() << std::endl;
+    // std::cout "tau_d: " << << "--------" << std::endl;
+    std::cout << "tau_impedance: " << tau_impedance.transpose() << std::endl;
     // std::cout << "--------" << std::endl;
-    // std::cout << tau_impedance << std::endl;
-    // std::cout << "--------" << std::endl;
-    // std::cout << coriolis << std::endl;
+    std::cout << "coriolis: " << coriolis.transpose() << std::endl;
     // std::cout << "Inertia scaling [m]: " << std::endl;
     // std::cout << T << std::endl;
   }
