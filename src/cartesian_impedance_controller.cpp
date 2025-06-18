@@ -52,7 +52,6 @@ void CartesianImpedanceController::update_stiffness_and_references(){
   //std::lock_guard<std::mutex> position_d_target_mutex_lock(position_and_orientation_d_target_mutex_);
   position_d_ = filter_params_ * position_d_target_ + (1.0 - filter_params_) * position_d_;
   orientation_d_ = orientation_d_.slerp(filter_params_, orientation_d_target_);
-  F_contact_des = 0.05 * F_contact_target + 0.95 * F_contact_des;
 }
 
 
@@ -190,7 +189,12 @@ CallbackReturn CartesianImpedanceController::on_activate(const rclcpp_lifecycle:
   std::cout << frame.name << std::endl;
   }
   std::cout << "ANumber of available velocities:" << model_.nv << std::endl;
-  pinocchio::forwardKinematics(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished());
+  dq_.resize(model_.nv);
+  q_.resize(model_.nq);
+  updateJointStates();
+  jacobian.resize(6, model_.nv);
+  jacobian_transpose_pinv.resize(model_.nv, 6);
+  pinocchio::forwardKinematics(model_, data_, q_);
   pinocchio::updateFramePlacements(model_, data_);
   //Eigen::Affine3d initial_transform(data_.oMf[end_effector_frame_id_]);
   Eigen::Affine3d transform;
@@ -237,35 +241,14 @@ void CartesianImpedanceController::updateJointStates() {
 }
 
 controller_interface::return_type CartesianImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {  
-  // if (outcounter == 0){
-  // std::cout << "Enter 1 if you want to track a desired position or 2 if you want to use free floating with optionally shaped inertia" << std::endl;
-  // std::cin >> mode_;
-  // std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-  // std::cout << "Mode selected" << std::endl;
-  // while (mode_ != 1 && mode_ != 2){
-  //   std::cout << "Invalid mode, try again" << std::endl;
-  //   std::cin >> mode_;
-  // }
-  // }
-  //std::array<double, 49> mass = franka_robot_model_->getMassMatrix();
-  //std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
-  //std::array<double, 42> jacobian_array =  franka_robot_model_->getZeroJacobian(franka::Frame::kEndEffector);
-  //std::array<double, 16> pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
-  //Eigen::Map<Eigen::Matrix<double, 7, 1>> coriolis(coriolis_array.data());
-  //Eigen::Map<Eigen::Matrix<double, 6, 7>> jacobian(jacobian_array.data());
-  //Eigen::Map<Eigen::Matrix<double, 7, 7>> M(mass.data());
-  //Eigen::Affine3d transform(Eigen::Matrix4d::Map(pose.data()));
-  //Eigen::Vector3d position(transform.translation());
-  //Eigen::Quaterniond orientation(transform.rotation());
-  std::cout << "q_: " << q_.transpose() << std::endl;
-  //TODO: change references to q w.r.t pinocchio to be of dimension 9 or handle this mismatch otherwise
-  M = pinocchio::crba(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished());
-  std::cout << "M: " << M << std::endl;
-  coriolis = pinocchio::rnea(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished(), (Eigen::VectorXd(9) << dq_.head(7), 0.0, 0.0).finished(), Eigen::VectorXd::Zero(model_.nv));
-  pinocchio::computeFrameJacobian(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished(), end_effector_frame_id_, pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
-  std::cout << "Jacobian: " << jacobian << std::endl;
-  pinocchio::forwardKinematics(model_, data_, (Eigen::VectorXd(9) << q_.head(7), 0.0, 0.0).finished());
+
+  Eigen::VectorXd dynamic_torques = pinocchio::rnea(model_, data_, q_,  dq_, Eigen::VectorXd::Zero(model_.nv)); // 
+  M = pinocchio::crba(model_, data_, q_); // rigid body algorithm
+  pinocchio::computeFrameJacobian(model_, data_, q_, end_effector_frame_id_, pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
+  pinocchio::forwardKinematics(model_, data_, q_);
   pinocchio::updateFramePlacements(model_, data_);
+  Eigen::MatrixXd g = pinocchio::computeGeneralizedGravity(model_, data_, q_);
+  coriolis = dynamic_torques - g;
   //Eigen::Affine3d transform(data_.oMf[end_effector_frame_id_]);
   Eigen::Affine3d transform;
   transform.linear() = data_.oMf[end_effector_frame_id_].rotation();  // Extract rotation
@@ -275,9 +258,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   orientation_d_target_ = Eigen::AngleAxisd(rotation_d_target_[0], Eigen::Vector3d::UnitX())
                         * Eigen::AngleAxisd(rotation_d_target_[1], Eigen::Vector3d::UnitY())
                         * Eigen::AngleAxisd(rotation_d_target_[2], Eigen::Vector3d::UnitZ());
-  updateJointStates(); 
-
-  
+  updateJointStates();  
   error.head(3) << position - position_d_;
 
   if (orientation_d_.coeffs().dot(orientation.coeffs()) < 0.0) {
@@ -291,10 +272,10 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     // correcting D to be critically damped
   D =  D_gain* K.cwiseMax(0.0).cwiseSqrt() * Lambda.cwiseMax(0.0).diagonal().cwiseSqrt().asDiagonal();
 
-  F_impedance = -1 * (D * (jacobian.topLeftCorner(6,7) * dq_) + K * error);
+  F_impedance = -1 * ((D * jacobian * dq_) + K * error);
 
   Eigen::VectorXd tau_nullspace(7), tau_d(7), tau_impedance(7);
-  pseudoInverse(jacobian.topLeftCorner(6,7).transpose(), jacobian_transpose_pinv);
+  pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv);
 
   //tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) -
   //                  jacobian.transpose() * jacobian_transpose_pinv) *
@@ -302,7 +283,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //                  (2.0 * sqrt(nullspace_stiffness_)) * dq_);  // if config control ) false we don't care about the joint position
 
   tau_impedance = jacobian.topLeftCorner(6,7).transpose() * Sm * F_impedance; //+ jacobian.transpose() * Sf * F_cmd;
-  tau_d = tau_impedance + tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
+  tau_d = tau_impedance + tau_nullspace + coriolis.head(7); //add nullspace and coriolis components to desired torque
   tau_d << saturateTorqueRate(tau_d, tau_J_d_M);  // Saturate torque rate to avoid discontinuities
   tau_J_d_M = tau_d;
 
@@ -310,16 +291,16 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     command_interfaces_[i].set_value(tau_d(i));
   }
   
-  if (true/*outcounter % 1000/update_frequency == 0*/){
+  if (outcounter % 1000 == 0){
     // std::cout << "F_ext_robot [N]" << std::endl;
-    // std::cout << O_F_ext_hat_K << std::endl;
-    // std::cout << O_F_ext_hat_K_M << std::endl;
-    std::cout << "Lambda: " << Lambda << std::endl;
+    std::cout << "dynamic torques" << dynamic_torques.transpose() << std::endl;
+    std::cout << "g " << g.transpose() << std::endl;
+    //std::cout << "Lambda: " << Lambda << std::endl;
     std::cout << "tau_d: " << tau_d.transpose() << std::endl;
     // std::cout << "--------" << std::endl;
-    std::cout << "tau_nullspace: " << tau_nullspace.transpose() << std::endl;
+    //std::cout << "tau_nullspace: " << tau_nullspace.transpose() << std::endl;
     // std::cout "tau_d: " << << "--------" << std::endl;
-    std::cout << "tau_impedance: " << tau_impedance.transpose() << std::endl;
+    //std::cout << "tau_impedance: " << tau_impedance.transpose() << std::endl;
     // std::cout << "--------" << std::endl;
     std::cout << "coriolis: " << coriolis.transpose() << std::endl;
     // std::cout << "Inertia scaling [m]: " << std::endl;

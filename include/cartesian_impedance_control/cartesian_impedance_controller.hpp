@@ -116,8 +116,8 @@ public:
     Eigen::Matrix<double, 7, 1> q_subscribed_M;
     Eigen::Matrix<double, 7, 1> tau_J_d_M = Eigen::MatrixXd::Zero(7, 1);
     Eigen::Matrix<double, 6, 1> O_F_ext_hat_K_M = Eigen::MatrixXd::Zero(6,1);
-    Eigen::MatrixXd q_;
-    Eigen::MatrixXd dq_;
+    Eigen::VectorXd q_;
+    Eigen::VectorXd dq_;
     Eigen::MatrixXd jacobian_transpose_pinv;  
     Eigen::MatrixXd M;
     Eigen::VectorXd coriolis;
