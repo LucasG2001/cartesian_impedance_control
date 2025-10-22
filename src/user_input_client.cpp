@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
         std:: cin >> task_selection;
         switch (task_selection){
             case 1:{ 
-                std::cout << "Enter new goal position: \n [1] --> 0.5, -0.4, 0.5 \n [2] --> DO NOT USE \n [3] --> 0.5, 0.4, 0.5\n";
+                std::cout << "Enter new goal position: \n [1] --> 0.5, -0.4, 0.5 \n [2] --> custom position \n [3] --> 0.5, 0.4, 0.5\n";
                 std::cin >> pose_selection;
                 switch (pose_selection){
                     case 1:{
@@ -39,18 +39,32 @@ int main(int argc, char **argv) {
                         pose_request->yaw = M_PI_2;
                         break;
                     }
-                    case 2:{
-                        std::cout << "Enter your desired position and orientation" << std::endl;
-                        std::array<double, 6> pose;
-                        for (long unsigned int i = 0; i<pose.size(); ++i){
-                            std::cin >> pose[i];
-                        }
-                        pose_request->x = pose[0];
-                        pose_request->y = pose[1];
-                        pose_request->z = pose[2];
-                        pose_request->roll = pose[3];
-                        pose_request->pitch = pose[4];
-                        pose_request->yaw = pose[5];
+                    case 2: {
+                        std::cout << "Enter your desired position and orientation." << std::endl;
+
+                        double x, y, z;
+                        std::cout << "Enter X position: ";
+                        std::cin >> x;
+                        std::cout << "Enter Y position: ";
+                        std::cin >> y;
+                        std::cout << "Enter Z position: ";
+                        std::cin >> z;
+
+                        // Confirm input
+                        std::cout << "\nYou entered:"
+                                << "\n  X = " << x
+                                << "\n  Y = " << y
+                                << "\n  Z = " << z;
+
+                        pose_request->x = x;
+                        pose_request->y = y;
+                        pose_request->z = z;
+
+                        // Fixed orientation
+                        pose_request->roll = M_PI;      // 180 degrees
+                        pose_request->pitch = 0.0;
+                        pose_request->yaw = M_PI_2;     // 90 degrees
+
                         break;
                     }
                     case 3:{

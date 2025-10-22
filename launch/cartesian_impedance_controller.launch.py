@@ -1,20 +1,6 @@
-#  Copyright (c) 2023 Franka Robotics GmbH
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-
-
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler, ExecuteProcess
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -35,6 +21,20 @@ def generate_launch_description():
     use_fake_hardware = LaunchConfiguration(use_fake_hardware_parameter_name)
     fake_sensor_commands = LaunchConfiguration(fake_sensor_commands_parameter_name)
     use_rviz = LaunchConfiguration(use_rviz_parameter_name)
+
+     # Execute the set_load.sh script
+    set_force_torque_profile = ExecuteProcess(
+        cmd=['/home/lucas/franka_ros2_ws/src/drill_control/launch/set_force_torque_limits.sh'],  # Reference to the shell script in the same folder
+        output='screen',
+    )
+
+    # Spawn impedance controller node
+    impedance_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['cartesian_impedance_controller'],
+        output='screen',
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -67,19 +67,23 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([PathJoinSubstitution(
                 [FindPackageShare('franka_bringup'), 'launch', 'franka.launch.py'])]),
-            launch_arguments={robot_ip_parameter_name: robot_ip,
-                              arm_id_parameter_name: arm_id,
-                              load_gripper_parameter_name: load_gripper,
-                              use_fake_hardware_parameter_name: use_fake_hardware,
-                              fake_sensor_commands_parameter_name: fake_sensor_commands,
-                              use_rviz_parameter_name: use_rviz
-                              }.items(),
+            launch_arguments={
+                robot_ip_parameter_name: robot_ip,
+                arm_id_parameter_name: arm_id,
+                load_gripper_parameter_name: load_gripper,
+                use_fake_hardware_parameter_name: use_fake_hardware,
+                fake_sensor_commands_parameter_name: fake_sensor_commands,
+                use_rviz_parameter_name: use_rviz
+            }.items(),
         ),
 
-        Node(
-            package='controller_manager',
-            executable='spawner',
-            arguments=['cartesian_impedance_controller'],
-            output='screen',
+        set_force_torque_profile,
+
+        # Register event: once franka.launch.py finishes, spawn impedance controller
+        RegisterEventHandler(
+            OnProcessExit(
+                target_action=set_force_torque_profile,  # any process exit from franka.launch.py
+                on_exit=[impedance_spawner],
+            )
         ),
     ])
