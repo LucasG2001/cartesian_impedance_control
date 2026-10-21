@@ -1,6 +1,113 @@
-controller_manager:
-  ros__parameters:
-    update_rate: 1000  # Hz
+# Controller configuration for cartesian_impedance_control (loaded by ros2_control_node via
+# franka.launch.py controllers_yaml:=..., see launch/cartesian_impedance_controller.launch.py).
+# Same content as ros2_ws/src/thesis_bringup/config/controllers.yaml (copied 2026-10-13); keep both in sync.
+#
+# Source: franka_bringup/config/controllers.yaml of franka_ros2 v2.2.0 (Franka Robotics GmbH, Apache 2.0),
+# copied 2026-10-13 from ~/matteo/franka_ros2_ref/franka_bringup (the sources in the thesis_franka image).
+# Kept unchanged: controller_manager update_rate / thread_priority, joint_state_broadcaster,
+# franka_robot_state_broadcaster and their parameters, the namespace-agnostic "/**:" style (merged into one
+# "/**:" block instead of one per controller, so no YAML parser sees duplicate keys; same parameters).
+# Removed: all franka_example_controllers entries (cartesian_*, elbow, gravity_compensation, gripper,
+# joint_impedance*, joint_position, joint_velocity, model, move_to_start) and
+# franka_mobile_example_controllers/MobileCartesianVelocityExampleController, because these packages are not
+# in the thesis_franka image (docs/docker.md, open point 1) and we do not use them.
+# Added: cartesian_impedance_controller (ros2_ws/src/cartesian_impedance_control, docs/controller-setup.md).
 
-    cartesian_impedance_controller:
-      type: cartesian_impedance_control/CartesianImpedanceController
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 1000
+      thread_priority: 98
+
+      franka_robot_state_broadcaster:
+        type: franka_robot_state_broadcaster/FrankaRobotStateBroadcaster
+        state_interfaces:
+          robot_state
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      cartesian_impedance_controller:
+        type: cartesian_impedance_control/CartesianImpedanceController
+
+  franka_robot_state_broadcaster:
+    ros__parameters:
+      lock_try_count: 5 # Number of attempts to acquire the lock in a single on_update()
+      lock_sleep_interval: 5 # microseconds sleep between attempts
+      lock_log_error: true #  Log error if lock acquisition fails - false == do not log
+      lock_update_success: false # return update OK, although lock fails (no update occurs)
+
+  joint_state_broadcaster:
+    ros__parameters:
+      robot_type: "fr3"
+      joints:
+        - fr3_joint1
+        - fr3_joint2
+        - fr3_joint3
+        - fr3_joint4
+        - fr3_joint5
+        - fr3_joint6
+        - fr3_joint7
+
+  cartesian_impedance_controller:
+    ros__parameters:
+      arm_id: "fr3"      # read by the controller in on_configure (cpp:214); prefixes fr3/robot_model, fr3_joint<i>
+      robot_type: "fr3"  # v2.2.0 convention, not read yet (fix-list step 9: rename arm_id -> robot_type)
+
+      # Tuning (read once in on_configure; docs/controller-tuning.md). Write every number as a float (1000.0,
+      # not 1000), otherwise the controller fails to load with a parameter type error.
+      # Values below = baseline = the behaviour before 2026-10-13 (all new options off). Order of 6-vectors: x, y, z, rx, ry, rz
+      # (base frame). Change a value -> restart the launch (no rebuild needed).
+      stiffness: [1000.0, 1000.0, 1000.0, 130.0, 130.0, 45.0]  # [N/m, N/m, N/m, Nm/rad x3], start-up K
+      damping:
+        ratio_translational: 0.7   # D_ii = 2 * ratio * sqrt(K_ii * Lambda_ii); 1.0 = critically damped (was 1.0: 30 Hz arm-yaw vibration after arrival, bag 165638)
+        ratio_rotational: 0.7      # (was 1.3: 23 Hz wrist limit cycle at the end pose, bag 2026-10-13_1634)
+        rot_z_min_factor: 0.0      # D_rz >= factor * sqrt(K_rz) (was 2.0: D_rz 8-11x critical, wrist chatter, bag 2026-10-13_1625)
+      integrator:
+        weights: [350.0, 350.0, 0.0, 50.0, 50.0, 50.0]  # 0.0 everywhere = no integral action
+        limit_force: 2.5           # anti-windup [N]
+        limit_torque: 1.5          # anti-windup [Nm]
+        limit_torque_z: 0.5        # anti-windup [Nm]
+        reset_on_new_target: false # reset the integral when the target position changes (set_pose)
+      saturation:
+        max_force: 18.0            # clamp on the Cartesian command [N]
+        max_torque: 9.0            # [Nm]
+        max_torque_z: 2.0          # [Nm]
+        clamp_spring_only: false   # true: clamp only K*e + I; damping D*v clamped separately (below)
+        max_damping_force: 36.0    # only used if clamp_spring_only [N]
+        max_damping_torque: 18.0   # only used if clamp_spring_only [Nm]
+      filter_params: 0.002         # reference low-pass per 1 ms cycle (0.002 -> tau ~ 0.5 s); smaller = slower
+      max_reference_velocity:      # speed limit of the filtered reference; 0.0 = no limit (old behaviour)
+        translational: 0.05        # [m/s] test 5 at the M1 speed limit (2026-10-19; before 0.3, before that 0.0 = no limit: 1.3 m/s steps, 57 mm detour, bag 170214)
+        rotational: 0.2            # [rad/s] (2026-10-19; before 1.0, before that 0.0)
+      delta_tau_max: 1.0           # torque rate limit per 1 ms cycle [Nm]
+      lambda_regularization: 0.0   # Lambda = (J M^-1 J^T + reg*I)^-1; > 0 bounds Lambda near singularities
+      nullspace:                   # posture control, exact projector since 2026-10-13 (no effect on the end effector)
+        stiffness: 5.0             # posture spring [Nm/rad]; 0 = off (was 0.0: elbow drift -> singular block, bag 1644)
+        damping: 1.0               # joint damping in the nullspace [Nms/rad]; 0 = off (was 0.0)
+        max_torque: 5.0            # clamp per joint [Nm]
+        target_from_activation: false  # true: posture = q at activation; false: q_target below
+        q_target: [0.10, -0.19, -0.09, -1.84, -0.02, 1.65, 0.80]  # IK for (0.5, 0, 0.5) pointing down, sigma_min 0.18
+      start_pose:                  # smooth move at activation (minimum-jerk); a set_pose / reference_pose cancels it
+        enabled: true
+        position: [0.5, 0.0, 0.5]  # [m], fr3_link0, O_T_EE = Desk F_T_EE (TCP z 0.1119 m, -45 deg; not the flange)
+        use_orientation: true      # false: keep the orientation at activation
+        orientation_xyzw: [1.0, 0.0, 0.0, 0.0]  # pointing down (as in all runs so far)
+        max_velocity: 0.1          # peak speed [m/s] (max 0.5)
+        max_angular_velocity: 0.3  # peak [rad/s]
+      modes:                       # stiffness presets set by the /cartesian_impedance_controller/control_mode topic
+        normal_stiffness: [2500.0, 2500.0, 1500.0, 130.0, 130.0, 45.0]  # control_mode 0
+        float_stiffness: [150.0, 150.0, 150.0, 40.0, 40.0, 20.0]        # control_mode 2
+        lift_stiffness: [0.0, 0.0, 8500.0, 0.0, 0.0, 0.0]               # control_mode 3
+        contact_stiffness: [2500.0, 2500.0, 100.0, 40.0, 40.0, 20.0]    # z-contact switch in control_mode 1
+      target:                      # checks on reference_pose / set_pose targets (2026-10-19, fix-list a13); a rejected target is logged and ignored
+        max_distance: 0.5          # [m] max distance of a new target from the current EE position
+        workspace_enabled: true    # box check below on/off
+        # Box for the EE position (Desk TCP) in the base frame fr3_link0 [m]. z_min 0.05 since 2026-10-20 (M2 insertion,
+        # docs/decisions.md "M2 decisions"): seated pin on r1_j07 -> TCP z ~0.068, >= 15 mm above the floor (was 0.10 for M1).
+        workspace_min: [0.15, -0.60, 0.05]
+        workspace_max: [0.80, 0.60, 0.80]
+      debug:
+        publish_rate: 100.0        # [Hz] default 100 (2026-10-19); 1000.0 = every cycle, only for tuning tests (1 kHz bag ~0.5 GB/min) /cartesian_impedance_controller/debug (Float64MultiArray, names in layout); 0.0 = off
+
+      # Tuning log (sets 1-3 made it worse, all changed at once): docs/controller-tuning.md. Change ONE value per test.

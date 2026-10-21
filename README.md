@@ -49,7 +49,8 @@ ros2 run cartesian_impedance_control user_input_client
 
 You have multiple options: 
 1. Change target position of the end-effector (only works in mode 1 and not in free-float)
-2. Change impedance parameter
+   (thesis copy: position only, the hardcoded roll/pitch/yaw of the client are ignored; see "Target interface" below)
+2. Change impedance parameter (thesis copy: not supported, the service logs a warning and returns false)
 3. Change mode (mode 1 = cartesian impedance control --> with a position / mode 2 = free-float with variable inertia)
 
 This section should give the reader a better understanding of how the controller
@@ -60,6 +61,34 @@ After launching the controller the three startup functions on_init(), on_configu
 In on_init(), the constructor of the input server is called, and together with the references to the variables that need to be changed during runtime, an object of this class is created. Then, this object is multithreaded in order to make sure that the controller and server can run in parallel. During on_configure(), a FrankaRobotModel object is assigned robot parameters, over which some of the states from the robot can be read. Then, the controller subscribes to the franka_forbot_state_broadcaster, using a reliable quality of service setting. If this setting would not be specified, it might happen, that the robot does not receive the states in the beginning and has an undefined behaviour. After that, the collision behavior is assigned to the robot. For that, a client is created and a request is sent to the robot to change the collision behavior to what is specified. When on_activate() is called, the franka_robot_model_ variable is assigned its states, which have been before declared in the state_interface_configuration(). Then the initial states are assigned and mapped to the respective variables. Next to the StateInterface, also a so-called CommandInterface is created before the controller starts. This interface is later used to send the desired torques to the robot.
 #### Update()
 The update() function is where the controller itself is running. At the start, the robot states are again read and mapped to the respective variables. Then the rotation quaternion is created given the desired Euler angles. When changing these angles, attention has to be paid as the standard position (gripper pointing downwards and the flat part of the end-effector pointing in x-direction), has the Euler angles (PI, 0, 0). The next step is to get the position and velocity of all the joints, using the StateInterface. Then the pseudo-inverse of the Jacobian is created using the pseudoinverse() function, the error terms are alculated and the inertia of the robot is calculated. To improve the robot's behavior, the external force is smoothened using an exponential filter. The smoothing factor of choice is equal to 0.1. For increased precision, the controller uses friction compensation as described in Luba 2024. The integrator in there makes the robot push the interactor away when not at the desired position and for that, a Boolean is introduced which empties the integrator as soon as the robot has an external force of more than 10N. In the switch statement, the controller checks whether free-float or impedance control is used. If mode_ = 1, the controller uses impedance control. If mode_ = 2, the free-float is chosen. Then the nullspace torque is calculated, the impedance force is converted into joint torques, and the desired torque, which is the sum of impedance, nullspace, Coriolis, and friction torques is calculated. This result is saturated, to limit the torque ramp. For this project, a torque ramp of 100 Nm/s was used. This saturated torque is then commanded to the robot using the command interface. After that, the position and orientation intermediate steps are updated, which also use an exponential filter. At the very end of the update() function, a condition with variable terminal output frequency for debugging purposes is defined. This update loop is running at 1000 Hz and is only interrupted through robot errors and manual shutting down of the controller. At the very end, the on_deactivate() is called where the franka_robot_model_ states are released. 
+
+### Target interface (thesis copy, changed 2026-10-19)
+This section replaces the description of the input server below (kept for reference; `user_input_server.*` was
+deleted). docs/controller-tuning.md has the details.
+- **Activation:** Before activation, hand-guide the hand to point roughly down (flange near the start orientation): a large rotation
+  in the start move passed low manipulability (sigma_min 0.062) with a 32 Hz vibration for ~3 s (bag
+  2026-10-19_162402_retest, known diag(Lambda) damping mode).
+- `/set_pose` (`messages_fr3/srv/SetPose`) and `/set_param` (`messages_fr3/srv/SetParam`) are services of the
+  controller node itself (absolute names, so `user_input_client` works unchanged). There is no extra thread or node
+  and no `rclcpp::shutdown()`.
+- `/set_pose` is **position only**: roll / pitch / yaw are ignored and the orientation target stays unchanged,
+  because the client always sends a hardcoded roll 180 deg / yaw 90 deg. The integrator is reset only if
+  `integrator.reset_on_new_target` is true.
+- `/set_param` is **not supported**: it logs a warning, changes nothing and returns `success = false` (D is recomputed
+  every cycle and T was unused, so it never had an effect). Gains are parameters in `launch/controllers.yaml`.
+- `/cartesian_impedance_controller/reference_pose` (`geometry_msgs/Pose`, base frame fr3_link0, Desk TCP): full pose
+  target; resets the integrator (as before).
+- `/cartesian_impedance_controller/control_mode` (`std_msgs/Int16`): 3 lift, 2 float, 1 compliant (z-contact switch),
+  anything else normal; same behaviour as before.
+- Every target is checked before it is used (`target.*` parameters): no NaN/Inf; quaternion norm in [0.9, 1.1]
+  (then normalised); at most `target.max_distance` (0.5 m) from the current EE position; inside the workspace box
+  `target.workspace_min` / `workspace_max` (if `target.workspace_enabled`). A rejected target is logged and ignored;
+  while the controller is inactive every target is rejected.
+- Thread safety: callbacks run on the controller manager's executor; they hand a complete target to `update()`
+  through a `realtime_tools::RealtimeBuffer`, and only `update()` changes the targets, K and the integrator. The
+  robot_state callback only filters the external wrench; the mode-1 z-contact switch runs in `update()`.
+- Joint position / velocity state interfaces are looked up by name in `on_activate` (activation fails with an error
+  naming a missing interface), not by index order.
 
 ### Input service
 The service consists of a server and a client. Each of those subsystems has its own .cpp and .hpp file, called user_input_client.cpp, user_input_client.hpp, user_input_server.cpp and user_input_client.hpp respectively. The client has to be called in a second terminal, while the server is automatically launched when launching the controller.

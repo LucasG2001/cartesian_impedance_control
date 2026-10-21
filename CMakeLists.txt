@@ -27,14 +27,14 @@ find_package(generate_parameter_library)
 find_package(std_msgs REQUIRED)
 find_package(messages_fr3 REQUIRED)
 find_package(rclcpp_action REQUIRED)
-find_package(pinocchio REQUIRED)
+find_package(realtime_tools REQUIRED)
 
 
 add_library(
         ${PROJECT_NAME}
         SHARED
         src/cartesian_impedance_controller.cpp
-        src/user_input_server.cpp
+        src/target_validation.cpp
         )
 target_include_directories(
         ${PROJECT_NAME}
@@ -53,6 +53,7 @@ ament_target_dependencies(
         franka_semantic_components
         std_msgs
         messages_fr3
+        realtime_tools
 )
 
 
@@ -61,7 +62,6 @@ pluginlib_export_plugin_description_file(
 
 add_executable(user_input_client src/user_input_client.cpp)
 target_link_libraries(user_input_client ${PROJECT_NAME})
-target_link_libraries(cartesian_impedance_control pinocchio::pinocchio)
 
 
 
@@ -108,6 +108,12 @@ if(BUILD_TESTING)
     ament_flake8()
     ament_pep257()
     ament_xmllint()
+
+    # target checks (pure function, no ROS / robot); run only this test with
+    # colcon test --packages-select cartesian_impedance_control --ctest-args -R test_target_validation
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_target_validation test/test_target_validation.cpp src/target_validation.cpp)
+    target_include_directories(test_target_validation PRIVATE include ${EIGEN3_INCLUDE_DIRS})
 
     if(CHECK_TIDY)
         find_package(ament_cmake_clang_tidy REQUIRED)
