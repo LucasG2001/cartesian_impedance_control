@@ -26,6 +26,7 @@
 #include <thread>
 #include <chrono>         
 
+#include "cartesian_impedance_control/pinocchio_model.hpp"
 #include "cartesian_impedance_control/user_input_server.hpp"
 
 #include <rclcpp/rclcpp.hpp>
@@ -124,6 +125,9 @@ public:
     //Functions
     void topic_callback(const std::shared_ptr<franka_msgs::msg::FrankaRobotState> msg);
     void updateJointStates();
+    // Fills M, coriolis (no gravity), the EE pose and member J from the selected model source.
+    void computeModel(Eigen::Matrix<double, 7, 7>& M, Eigen::Matrix<double, 7, 1>& coriolis,
+                      Eigen::Affine3d& transform);
     void calculate_tau_friction();
     void update_stiffness_and_references();
     void reference_pose_callback(const geometry_msgs::msg::Pose::SharedPtr msg);
@@ -153,8 +157,15 @@ public:
     const std::string k_robot_state_interface_name{"robot_state"};
     const std::string k_robot_model_interface_name{"robot_model"};
     std::unique_ptr<franka_semantic_components::FrankaRobotModel> franka_robot_model_;
-    const double delta_tau_max_{1.0};
-    const double dt = 0.001;
+    // Model source: "franka" (libfranka via franka_hardware) or "pinocchio" (URDF, e.g. Isaac Sim)
+    std::string model_source_{"franka"};
+    std::string urdf_path_;
+    std::string ee_frame_{"fr3_hand_tcp"};
+    bool enable_input_server_{true};
+    std::unique_ptr<PinocchioModel> pinocchio_model_;
+    bool usePinocchio() const { return model_source_ == "pinocchio"; }
+    const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
+    double dt_ = 0.001;                // control period [s], set from update()'s period
                 
     //Impedance control variables              
     Eigen::Matrix<double, 6, 6> Lambda = IDENTITY;                                           // operational space mass matrix
@@ -232,7 +243,7 @@ public:
     bool do_logging = false;               // set if we do log values
 
     //Filter-parameters
-    double filter_params_{0.002};
+    double filter_params_{0.002};  // per 1 ms step, rescaled to dt_ in update_stiffness_and_references()
     int mode_ = 1;
 };
 }  // namespace cartesian_impedance_control

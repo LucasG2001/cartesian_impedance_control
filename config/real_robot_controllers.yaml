@@ -1,0 +1,12 @@
+# Real FR3 via franka_hardware (libfranka): robot model from the franka_robot_model interfaces.
+controller_manager:
+  ros__parameters:
+    update_rate: 1000  # Hz
+    cartesian_impedance_controller:
+      type: cartesian_impedance_control/CartesianImpedanceController
+
+cartesian_impedance_controller:
+  ros__parameters:
+    arm_id: fr3
+    model_source: franka
+    enable_input_server: true

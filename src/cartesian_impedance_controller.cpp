@@ -136,10 +136,12 @@ void CartesianImpedanceController::update_stiffness_and_references(){
   /** at the moment we do not use dynamic reconfigure and control the robot via D, K and T **/
   //K = filter_params_ * cartesian_stiffness_target_ + (1.0 - filter_params_) * K;
   //D = filter_params_ * cartesian_damping_target_ + (1.0 - filter_params_) * D;
-  nullspace_stiffness_ = filter_params_ * nullspace_stiffness_target_ + (1.0 - filter_params_) * nullspace_stiffness_;
+  // filter_params_ is defined per 1 ms step; rescale so the time constant does not depend on the rate
+  const double a = 1.0 - std::pow(1.0 - filter_params_, dt_ / 0.001);
+  nullspace_stiffness_ = a * nullspace_stiffness_target_ + (1.0 - a) * nullspace_stiffness_;
   //std::lock_guard<std::mutex> position_d_target_mutex_lock(position_and_orientation_d_target_mutex_);
-  position_d_ = filter_params_ * position_d_target_ + (1.0 - filter_params_) * position_d_;
-  orientation_d_ = orientation_d_.slerp(filter_params_, orientation_d_target_);
+  position_d_ = a * position_d_target_ + (1.0 - a) * position_d_;
+  orientation_d_ = orientation_d_.slerp(a, orientation_d_target_);
 }
 
 
@@ -161,10 +163,11 @@ Eigen::Matrix<double, 7, 1> CartesianImpedanceController::saturateTorqueRate(
   const Eigen::Matrix<double, 7, 1>& tau_d_calculated,
   const Eigen::Matrix<double, 7, 1>& tau_J_d_M) {  
   Eigen::Matrix<double, 7, 1> tau_d_saturated{};
+  const double max_step = delta_tau_max_ * dt_ / 0.001;  // delta_tau_max_ is per 1 ms step
   for (size_t i = 0; i < 7; i++) {
   double difference = tau_d_calculated[i] - tau_J_d_M[i];
   tau_d_saturated[i] =
-         tau_J_d_M[i] + std::max(std::min(difference, delta_tau_max_), -delta_tau_max_);
+         tau_J_d_M[i] + std::max(std::min(difference, max_step), -max_step);
   }
   return tau_d_saturated;
 }
@@ -191,9 +194,11 @@ controller_interface::InterfaceConfiguration CartesianImpedanceController::state
     //state_interfaces_config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
   }
 
-  for (const auto& franka_robot_model_name : franka_robot_model_->get_state_interface_names()) {
-    state_interfaces_config.names.push_back(franka_robot_model_name);
-    std::cout << franka_robot_model_name << std::endl;
+  if (!usePinocchio()) {
+    for (const auto& franka_robot_model_name : franka_robot_model_->get_state_interface_names()) {
+      state_interfaces_config.names.push_back(franka_robot_model_name);
+      std::cout << franka_robot_model_name << std::endl;
+    }
   }
 
   const std::string full_interface_name = arm_id_ + "/" + state_interface_name_;
@@ -203,18 +208,57 @@ controller_interface::InterfaceConfiguration CartesianImpedanceController::state
 
 
 CallbackReturn CartesianImpedanceController::on_init() {
-   UserInputServer input_server_obj(&position_d_target_, &rotation_d_target_, &K, &D, &T);
-   std::thread input_thread(&UserInputServer::main, input_server_obj, 0, nullptr);
-   input_thread.detach();
+   try {
+     auto_declare<std::string>("arm_id", "fr3");
+     auto_declare<std::string>("model_source", "franka");
+     auto_declare<std::string>("urdf_path", "");
+     auto_declare<std::string>("ee_frame", "fr3_hand_tcp");
+     auto_declare<bool>("enable_input_server", true);
+   } catch (const std::exception& e) {
+     RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
+     return CallbackReturn::ERROR;
+   }
+   // The input server spins its own node and calls rclcpp::shutdown() when done, so it must be
+   // disabled when the controller runs inside another process (e.g. Isaac Sim).
+   if (get_node()->get_parameter("enable_input_server").as_bool()) {
+     UserInputServer input_server_obj(&position_d_target_, &rotation_d_target_, &K, &D, &T);
+     std::thread input_thread(&UserInputServer::main, input_server_obj, 0, nullptr);
+     input_thread.detach();
+   }
    return CallbackReturn::SUCCESS;
 }
 
 
 CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle::State& /*previous_state*/) {
     arm_id_ = get_node()->get_parameter("arm_id").as_string();
-    franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
-    franka_semantic_components::FrankaRobotModel(arm_id_ + "/" + k_robot_model_interface_name,
-                                                 arm_id_ + "/" + k_robot_state_interface_name));
+    model_source_ = get_node()->get_parameter("model_source").as_string();
+    urdf_path_ = get_node()->get_parameter("urdf_path").as_string();
+    ee_frame_ = get_node()->get_parameter("ee_frame").as_string();
+    enable_input_server_ = get_node()->get_parameter("enable_input_server").as_bool();
+
+    if (model_source_ == "pinocchio") {
+      std::vector<std::string> arm_joints;
+      for (int i = 1; i <= num_joints; ++i) {
+        arm_joints.push_back(arm_id_ + "_joint" + std::to_string(i));
+      }
+      try {
+        pinocchio_model_ = std::make_unique<PinocchioModel>(urdf_path_, arm_joints, ee_frame_);
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_node()->get_logger(), "Failed to build Pinocchio model from '%s': %s",
+                     urdf_path_.c_str(), e.what());
+        return CallbackReturn::ERROR;
+      }
+      RCLCPP_INFO(get_node()->get_logger(), "Model source: pinocchio (%s, ee frame %s)",
+                  urdf_path_.c_str(), ee_frame_.c_str());
+    } else if (model_source_ == "franka") {
+      franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
+      franka_semantic_components::FrankaRobotModel(arm_id_ + "/" + k_robot_model_interface_name,
+                                                   arm_id_ + "/" + k_robot_state_interface_name));
+    } else {
+      RCLCPP_ERROR(get_node()->get_logger(), "Unknown model_source '%s' (expected 'franka' or 'pinocchio')",
+                   model_source_.c_str());
+      return CallbackReturn::ERROR;
+    }
                                                
   try {
     rclcpp::QoS qos_profile(1); // Depth of the message queue
@@ -238,10 +282,18 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
 
 CallbackReturn CartesianImpedanceController::on_activate(
   const rclcpp_lifecycle::State& /*previous_state*/) {
-  franka_robot_model_->assign_loaned_state_interfaces(state_interfaces_);
+  if (!usePinocchio()) {
+    franka_robot_model_->assign_loaned_state_interfaces(state_interfaces_);
+  }
 
-  std::array<double, 16> initial_pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
-  Eigen::Affine3d initial_transform(Eigen::Matrix4d::Map(initial_pose.data()));
+  // Hold the current pose and start from a clean torque / integrator state.
+  updateJointStates();
+  Eigen::Matrix<double, 7, 7> M;
+  Eigen::Matrix<double, 7, 1> coriolis;
+  Eigen::Affine3d initial_transform;
+  computeModel(M, coriolis, initial_transform);
+  tau_J_d_M.setZero();
+  I_error.setZero();
   position_d_ = initial_transform.translation();
   orientation_d_ = Eigen::Quaterniond(initial_transform.rotation());
   position_d_target_ = position_d_;
@@ -267,7 +319,9 @@ CallbackReturn CartesianImpedanceController::on_activate(
 
 controller_interface::CallbackReturn CartesianImpedanceController::on_deactivate(
   const rclcpp_lifecycle::State& /*previous_state*/) {
-  franka_robot_model_->release_interfaces();
+  if (!usePinocchio()) {
+    franka_robot_model_->release_interfaces();
+  }
   return CallbackReturn::SUCCESS;
 }
 
@@ -312,21 +366,43 @@ void CartesianImpedanceController::updateJointStates() {
   }
 }
 
-controller_interface::return_type CartesianImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {  
+void CartesianImpedanceController::computeModel(Eigen::Matrix<double, 7, 7>& M,
+                                               Eigen::Matrix<double, 7, 1>& coriolis,
+                                               Eigen::Affine3d& transform) {
+  if (usePinocchio()) {
+    // needs q_, dq_ from updateJointStates()
+    pinocchio_model_->compute(q_, dq_);
+    M = pinocchio_model_->mass();
+    coriolis = pinocchio_model_->coriolis();
+    J = pinocchio_model_->jacobian();
+    transform = pinocchio_model_->pose();
+    return;
+  }
   std::array<double, 49> mass = franka_robot_model_->getMassMatrix();
   std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
   std::array<double, 42> jacobian_array =  franka_robot_model_->getZeroJacobian(franka::Frame::kEndEffector);
   std::array<double, 16> pose = franka_robot_model_->getPoseMatrix(franka::Frame::kEndEffector);
-  Eigen::Map<Eigen::Matrix<double, 7, 1>> coriolis(coriolis_array.data());
+  coriolis = Eigen::Map<Eigen::Matrix<double, 7, 1>>(coriolis_array.data());
   J = Eigen::Map<Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
-  Eigen::Map<Eigen::Matrix<double, 7, 7>> M(mass.data());
-  Eigen::Affine3d transform(Eigen::Matrix4d::Map(pose.data()));
+  M = Eigen::Map<Eigen::Matrix<double, 7, 7>>(mass.data());
+  transform = Eigen::Affine3d(Eigen::Matrix4d::Map(pose.data()));
+}
+
+controller_interface::return_type CartesianImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {  
+  dt_ = period.seconds();
+  if (dt_ <= 0.0 || dt_ > 0.1) {
+    dt_ = 0.001;
+  }
+  updateJointStates();  // first: the Pinocchio model needs q_, dq_
+  Eigen::Matrix<double, 7, 7> M;
+  Eigen::Matrix<double, 7, 1> coriolis;
+  Eigen::Affine3d transform;
+  computeModel(M, coriolis, transform);
   Eigen::Vector3d position(transform.translation());
   Eigen::Quaterniond orientation(transform.rotation());
   //orientation_d_target_ = Eigen::AngleAxisd(rotation_d_target_[0], Eigen::Vector3d::UnitX())
   //                      * Eigen::AngleAxisd(rotation_d_target_[1], Eigen::Vector3d::UnitY())
   //                      * Eigen::AngleAxisd(rotation_d_target_[2], Eigen::Vector3d::UnitZ());
-  updateJointStates(); 
 
   
   error.head(3) << position - position_d_;
@@ -350,7 +426,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   D.topRightCorner(3,3).setZero();
   D.bottomLeftCorner(3,3).setZero();
   
-  I_error = I_error + integrator_weights.cwiseProduct(error) * 0.001; //weighted integral action
+  I_error = I_error + integrator_weights.cwiseProduct(error) * dt_; //weighted integral action
   //I_error.tail(4).setZero(); //only integrate position error in x and y, not rotation error
   I_error.head(3) = I_error.head(3).cwiseMin(2.5).cwiseMax(-2.5); //anti-windup
   I_error.tail(3) = I_error.tail(3).cwiseMin(1.5).cwiseMax(-1.5); //anti-windup

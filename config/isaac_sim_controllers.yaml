@@ -1,0 +1,18 @@
+# Isaac Sim (isaacsim.ros2.control): joint position/velocity state + effort command only,
+# so the robot model comes from Pinocchio. Robot gravity is disabled in the scene (like the
+# real FR3, which compensates it internally), so the controller adds no gravity term.
+controller_manager:
+  ros__parameters:
+    update_rate: 240        # <= PhysicsScene time steps per second
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    cartesian_impedance_controller:
+      type: cartesian_impedance_control/CartesianImpedanceController
+
+cartesian_impedance_controller:
+  ros__parameters:
+    arm_id: fr3
+    model_source: pinocchio
+    urdf_path: /home/njohnson/ci_mpc_assets/fr3.urdf
+    ee_frame: fr3_hand_tcp
+    enable_input_server: false

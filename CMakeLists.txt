@@ -27,12 +27,14 @@ find_package(generate_parameter_library)
 find_package(std_msgs REQUIRED)
 find_package(messages_fr3 REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(pinocchio REQUIRED)
 
 
 add_library(
         ${PROJECT_NAME}
         SHARED
         src/cartesian_impedance_controller.cpp
+        src/pinocchio_model.cpp
         src/user_input_server.cpp
         )
 target_include_directories(
@@ -41,6 +43,20 @@ target_include_directories(
         include
         ${EIGEN3_INCLUDE_DIRS}
 )
+# Pinocchio must come BEFORE libfranka in DT_NEEDED: libfranka (>= 0.14) embeds its own Pinocchio
+# build and exports those template instances (ModelTpl(), DataTpl(), ...) with a different memory
+# layout. The loader binds to the first definition in DT_NEEDED order, so with libfranka first
+# PinocchioModel calls libfranka's copies and crashes. CMake reorders target_link_libraries, so the
+# Pinocchio libs are also passed as link options, which land in front of all libraries.
+target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)  # plain signature, like ament_target_dependencies
+target_link_options(${PROJECT_NAME} PRIVATE
+        "LINKER:--push-state,--no-as-needed"
+        "$<TARGET_FILE:pinocchio::pinocchio_parsers>"
+        "$<TARGET_FILE:pinocchio::pinocchio_default>"
+        "LINKER:--pop-state")
+# Keep our own Pinocchio template instances private to this library (only PinocchioModel is exported).
+set_source_files_properties(src/pinocchio_model.cpp PROPERTIES
+        COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
 ament_target_dependencies(
         ${PROJECT_NAME}
         controller_interface
@@ -61,11 +77,16 @@ pluginlib_export_plugin_description_file(
 add_executable(user_input_client src/user_input_client.cpp)
 target_link_libraries(user_input_client ${PROJECT_NAME})
 
+# Standalone sanity check of PinocchioModel against libfranka reference values
+add_executable(pinocchio_model_check test/pinocchio_model_check.cpp)
+target_link_libraries(pinocchio_model_check ${PROJECT_NAME})
+
 
 
 
 install(TARGETS
         user_input_client
+        pinocchio_model_check
         DESTINATION lib/${PROJECT_NAME})
 
 install(
@@ -81,7 +102,7 @@ install(
 )
 
 install(
-  DIRECTORY launch
+  DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
 
