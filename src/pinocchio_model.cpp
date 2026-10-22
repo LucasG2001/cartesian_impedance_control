@@ -28,7 +28,8 @@ struct PinocchioModel::Impl {
 
 PinocchioModel::PinocchioModel(const std::string& urdf_path,
                                const std::vector<std::string>& arm_joints,
-                               const std::string& ee_frame)
+                               const std::string& ee_frame,
+                               const std::vector<double>& armature)
     : impl_(std::make_unique<Impl>()) {
   if (arm_joints.size() != 7) {
     throw std::invalid_argument("PinocchioModel: expected 7 arm joints");
@@ -67,6 +68,14 @@ PinocchioModel::PinocchioModel(const std::string& urdf_path,
     const auto jid = m.getJointId(name);
     impl_->q_idx.push_back(m.joints[jid].idx_q());
     impl_->v_idx.push_back(m.joints[jid].idx_v());
+  }
+  if (!armature.empty()) {
+    if (armature.size() != 7) {
+      throw std::invalid_argument("PinocchioModel: armature needs 7 values");
+    }
+    for (size_t i = 0; i < 7; ++i) {
+      m.armature[impl_->v_idx[i]] = armature[i];  // crba adds it to the mass matrix diagonal
+    }
   }
   impl_->q = Eigen::VectorXd::Zero(m.nq);
   impl_->v = Eigen::VectorXd::Zero(m.nv);

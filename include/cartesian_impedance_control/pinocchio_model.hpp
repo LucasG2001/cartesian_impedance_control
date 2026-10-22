@@ -32,9 +32,12 @@ class __attribute__((visibility("default"))) PinocchioModel {
   // arm_joints: the 7 joints the controller commands, in controller order.
   // All other joints in the URDF (e.g. gripper fingers) are locked at their
   // neutral position. ee_frame: URDF frame used as end-effector.
+  // armature: optional rotor inertia per arm joint [kg m^2] (reflected through the gearbox), added to the
+  // mass matrix; empty = none (URDF link inertias only).
   PinocchioModel(const std::string& urdf_path,
                  const std::vector<std::string>& arm_joints,
-                 const std::string& ee_frame);
+                 const std::string& ee_frame,
+                 const std::vector<double>& armature = {});
   ~PinocchioModel();
 
   PinocchioModel(const PinocchioModel&) = delete;

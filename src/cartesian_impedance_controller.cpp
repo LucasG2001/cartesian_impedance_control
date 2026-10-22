@@ -227,6 +227,7 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<std::string>("ee_frame", "fr3_hand_tcp");
      auto_declare<bool>("enable_input_server", true);
      auto_declare<double>("nullspace_damping", 0.0);
+     auto_declare<std::vector<double>>("armature", std::vector<double>{});
      auto_declare<std::vector<double>>("integrator_weights", {350, 350, 0, 50, 50, 50});
      auto_declare<std::vector<double>>("integrator_limits", {2.5, 2.5, 2.5, 1.5, 1.5, 0.5});
      auto_declare<std::vector<double>>("integrator_windows", {0, 0, 0, 0, 0, 0});
@@ -302,14 +303,16 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
         arm_joints.push_back(arm_id_ + "_joint" + std::to_string(i));
       }
       try {
-        pinocchio_model_ = std::make_unique<PinocchioModel>(urdf_path_, arm_joints, ee_frame_);
+        pinocchio_model_ = std::make_unique<PinocchioModel>(
+            urdf_path_, arm_joints, ee_frame_, get_node()->get_parameter("armature").as_double_array());
       } catch (const std::exception& e) {
         RCLCPP_ERROR(get_node()->get_logger(), "Failed to build Pinocchio model from '%s': %s",
                      urdf_path_.c_str(), e.what());
         return CallbackReturn::ERROR;
       }
-      RCLCPP_INFO(get_node()->get_logger(), "Model source: pinocchio (%s, ee frame %s)",
-                  urdf_path_.c_str(), ee_frame_.c_str());
+      RCLCPP_INFO(get_node()->get_logger(), "Model source: pinocchio (%s, ee frame %s, %s)",
+                  urdf_path_.c_str(), ee_frame_.c_str(),
+                  get_node()->get_parameter("armature").as_double_array().empty() ? "no armature" : "with armature");
     } else if (model_source_ == "franka") {
       franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
       franka_semantic_components::FrankaRobotModel(arm_id_ + "/" + k_robot_model_interface_name,
