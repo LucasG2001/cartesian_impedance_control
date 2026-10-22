@@ -214,6 +214,7 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<std::string>("urdf_path", "");
      auto_declare<std::string>("ee_frame", "fr3_hand_tcp");
      auto_declare<bool>("enable_input_server", true);
+     auto_declare<double>("nullspace_damping", 0.0);
    } catch (const std::exception& e) {
      RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
      return CallbackReturn::ERROR;
@@ -235,6 +236,7 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     urdf_path_ = get_node()->get_parameter("urdf_path").as_string();
     ee_frame_ = get_node()->get_parameter("ee_frame").as_string();
     enable_input_server_ = get_node()->get_parameter("enable_input_server").as_bool();
+    nullspace_damping_ = get_node()->get_parameter("nullspace_damping").as_double();
 
     if (model_source_ == "pinocchio") {
       std::vector<std::string> arm_joints;
@@ -448,8 +450,14 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   // tau_impedance = J.transpose() * Sm * (F_impedance /*+ F_repulsion + F_potential*/) + J.transpose() * Sf * F_cmd;
   tau_impedance = J.transpose() * F_impedance;
-  //auto tau_d_placeholder = tau_impedance 
-  tau_d << tau_impedance + coriolis; /*+ tau_nullspace + coriolis */; //add nullspace and coriolis components to desired torque
+  tau_nullspace.setZero();
+  if (nullspace_damping_ > 0.0) {
+    pseudoInverse(J.transpose(), jacobian_transpose_pinv);
+    tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) - J.transpose() * jacobian_transpose_pinv) *
+                     (-nullspace_damping_ * dq_);
+  }
+  //auto tau_d_placeholder = tau_impedance
+  tau_d << tau_impedance + tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
   tau_d << saturateTorqueRate(tau_d, tau_J_d_M);  // Saturate torque rate to avoid discontinuities
   tau_J_d_M = tau_d;
   //calculate_tau_friction();

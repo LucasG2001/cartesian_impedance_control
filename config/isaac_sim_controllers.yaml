@@ -16,3 +16,6 @@ cartesian_impedance_controller:
     urdf_path: /home/njohnson/ci_mpc_assets/fr3.urdf
     ee_frame: fr3_hand_tcp
     enable_input_server: false
+    # nullspace_damping (Nms/rad) is available but not needed once the scene has FR3 joint armature
+    # (ci_mpc scripts/isaac/prepare_scene.py); 0 keeps the controller identical to the real robot.
+    nullspace_damping: 0.0

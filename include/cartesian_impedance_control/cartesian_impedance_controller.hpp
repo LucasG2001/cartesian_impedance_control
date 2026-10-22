@@ -162,6 +162,9 @@ public:
     std::string urdf_path_;
     std::string ee_frame_{"fr3_hand_tcp"};
     bool enable_input_server_{true};
+    // Joint-space damping projected into the nullspace [Nms/rad]. 0 = off (real robot: joint
+    // friction damps the self-motion). The sim has no joint friction, so the elbow/wrist drift.
+    double nullspace_damping_{0.0};
     std::unique_ptr<PinocchioModel> pinocchio_model_;
     bool usePinocchio() const { return model_source_ == "pinocchio"; }
     const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
