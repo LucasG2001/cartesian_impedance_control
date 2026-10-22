@@ -57,8 +57,13 @@ void CartesianImpedanceController::calculate_tau_friction(){
     pose_error.setZero();
     pose_error = error;
     // Component-wise thresholding
-    pose_error = (pose_error.array() < 0.0008).select(0.0, pose_error); //set errors smaller than 0.0008 to 0
-    double alpha = 0.1;//constant for exponential filter in relation to static friction moment        
+    if (friction_abs_threshold_) {
+      pose_error = (pose_error.array().abs() < 0.0008).select(0.0, pose_error); //set errors smaller than 0.0008 to 0
+    } else {
+      pose_error = (pose_error.array() < 0.0008).select(0.0, pose_error); // upstream: zeroes all negative errors too
+    }
+    // filter constant 0.1 is per 1 ms step; rescale so the time constant does not depend on the rate
+    const double alpha = 1.0 - std::pow(1.0 - 0.1, dt_ / 0.001);
     dq_filtered = alpha* dq_ + (1 - alpha) * dq_filtered; //Filtering dq of every joint
     tau_impedance_filtered = alpha*tau_impedance + (1 - alpha) * tau_impedance_filtered; //Filtering tau_impedance
     //Creating and filtering a "fake" tau_impedance with own weights, optimized for friction compensation (else friction compensation would get stronger with higher stiffnesses)
@@ -66,14 +71,14 @@ void CartesianImpedanceController::calculate_tau_friction(){
     //Creating "fake" dq, that acts only in the impedance-space, else dq in the nullspace also gets compensated, which we do not want due to null-space movement
     dq_imp = dq_filtered - N * dq_filtered;
     //Calculation of friction force according to Bachelor Thesis: https://polybox.ethz.ch/index.php/s/iYj8ALPijKTAC2z?path=%2FFriction%20compensation
-    f = beta.cwiseProduct(dq_imp) + offset_friction;
+    f = beta.cwiseProduct(dq_imp) + (friction_offsets_ ? offset_friction : Eigen::Matrix<double, 7, 1>::Zero());
     g = coulomb_friction;
     g(4) = (coulomb_friction(4) + (static_friction(4) - coulomb_friction(4)) * exp(-1 * std::abs(dq_imp(4)/(dq_s(4) + 0.0001))));
     g(6) = (coulomb_friction(6) + (static_friction(6) - coulomb_friction(6)) * exp(-1 * std::abs(dq_imp(6)/dq_s(6))));
            
     dz = dq_imp.array() - dq_imp.array().abs() / g.array() * sigma_0.array() * z.array() + 0.025 * tau_friction_impedance.array()/*(J.transpose() * K * error).array()*/;
     dz(6) -= 0.02*tau_friction_impedance(6);
-    z = 0.001 * dz + z;
+    z = dt_ * dz + z;  // upstream: 0.001 * dz (1 kHz)
     tau_friction = sigma_0.array() * z.array() + 100 * sigma_1.array() * dz.array() + f.array();  
     // clamp elementwise between -4 and 4s
     tau_friction = tau_friction.cwiseMin(3.5).cwiseMax(-3.5);
@@ -215,6 +220,14 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<std::string>("ee_frame", "fr3_hand_tcp");
      auto_declare<bool>("enable_input_server", true);
      auto_declare<double>("nullspace_damping", 0.0);
+     auto_declare<std::vector<double>>("integrator_weights", {350, 350, 0, 50, 50, 50});
+     auto_declare<std::vector<double>>("integrator_limits", {2.5, 2.5, 2.5, 1.5, 1.5, 0.5});
+     auto_declare<std::string>("friction_compensation", "none");
+     auto_declare<bool>("friction_offsets", true);
+     auto_declare<bool>("friction_abs_threshold", false);
+     auto_declare<double>("friction_scale", 1.0);
+     auto_declare<double>("friction_tau_eps", 0.3);
+     auto_declare<double>("friction_vel_eps", 0.02);
    } catch (const std::exception& e) {
      RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
      return CallbackReturn::ERROR;
@@ -237,6 +250,25 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     ee_frame_ = get_node()->get_parameter("ee_frame").as_string();
     enable_input_server_ = get_node()->get_parameter("enable_input_server").as_bool();
     nullspace_damping_ = get_node()->get_parameter("nullspace_damping").as_double();
+    const auto weights = get_node()->get_parameter("integrator_weights").as_double_array();
+    const auto limits = get_node()->get_parameter("integrator_limits").as_double_array();
+    if (weights.size() != 6 || limits.size() != 6) {
+      RCLCPP_ERROR(get_node()->get_logger(), "integrator_weights and integrator_limits need 6 entries");
+      return CallbackReturn::ERROR;
+    }
+    integrator_weights = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(weights.data());
+    integrator_limits = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(limits.data());
+    friction_compensation_ = get_node()->get_parameter("friction_compensation").as_string();
+    friction_offsets_ = get_node()->get_parameter("friction_offsets").as_bool();
+    friction_abs_threshold_ = get_node()->get_parameter("friction_abs_threshold").as_bool();
+    friction_scale_ = get_node()->get_parameter("friction_scale").as_double();
+    friction_tau_eps_ = get_node()->get_parameter("friction_tau_eps").as_double();
+    friction_vel_eps_ = get_node()->get_parameter("friction_vel_eps").as_double();
+    if (friction_compensation_ != "none" && friction_compensation_ != "lugre" && friction_compensation_ != "coulomb" &&
+        friction_compensation_ != "velocity") {
+      RCLCPP_ERROR(get_node()->get_logger(), "friction_compensation must be none, lugre, coulomb or velocity");
+      return CallbackReturn::ERROR;
+    }
 
     if (model_source_ == "pinocchio") {
       std::vector<std::string> arm_joints;
@@ -430,9 +462,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   
   I_error = I_error + integrator_weights.cwiseProduct(error) * dt_; //weighted integral action
   //I_error.tail(4).setZero(); //only integrate position error in x and y, not rotation error
-  I_error.head(3) = I_error.head(3).cwiseMin(2.5).cwiseMax(-2.5); //anti-windup
-  I_error.tail(3) = I_error.tail(3).cwiseMin(1.5).cwiseMax(-1.5); //anti-windup
-  I_error.tail(1) = I_error.tail(1).cwiseMin(0.5).cwiseMax(-0.5); //anti-windup
+  I_error = I_error.cwiseMin(integrator_limits).cwiseMax(-integrator_limits); //anti-windup
  
   F_impedance = -1 * (D * (J * dq_) + K * error + I_error);
   F_impedance.head(3) = F_impedance.head(3).cwiseMin(18.0).cwiseMax(-18.0); //clamping forces to avoid instabilities
@@ -440,7 +470,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   double value = F_impedance(5);
   F_impedance(5) = std::max(-2.0, std::min(2.0, F_impedance(5))); //clamping torques to avoid
 
-  Eigen::VectorXd tau_task(7), tau_nullspace(7), tau_d(7), tau_impedance(7);
+  Eigen::VectorXd tau_task(7), tau_nullspace(7), tau_d(7);
   //pseudoInverse(J.transpose(), jacobian_transpose_pinv);
 
   //tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) -
@@ -457,13 +487,27 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
                      (-nullspace_damping_ * dq_);
   }
   //auto tau_d_placeholder = tau_impedance
-  tau_d << tau_impedance + tau_nullspace + coriolis; //add nullspace and coriolis components to desired torque
+  tau_friction.setZero();
+  if (friction_compensation_ == "lugre") {
+    calculate_tau_friction();
+  } else if (friction_compensation_ == "coulomb") {
+    for (int i = 0; i < 7; ++i) {
+      tau_friction(i) = friction_scale_ * (coulomb_friction(i) * std::tanh(tau_impedance(i) / friction_tau_eps_) +
+                                           beta(i) * dq_(i));
+    }
+  } else if (friction_compensation_ == "velocity") {
+    for (int i = 0; i < 7; ++i) {
+      tau_friction(i) = friction_scale_ * (coulomb_friction(i) * std::tanh(dq_(i) / friction_vel_eps_) +
+                                           beta(i) * dq_(i));
+    }
+  }
+  // friction compensation goes through the torque-rate limit too (upstream added it after the limit)
+  tau_d << tau_impedance + tau_nullspace + coriolis + tau_friction; //add nullspace and coriolis components to desired torque
   tau_d << saturateTorqueRate(tau_d, tau_J_d_M);  // Saturate torque rate to avoid discontinuities
   tau_J_d_M = tau_d;
-  //calculate_tau_friction();
 
   for (size_t i = 0; i < 7; ++i) {
-    command_interfaces_[i].set_value(tau_d(i) /*+ tau_friction(i)*/); //adding friction compensation
+    command_interfaces_[i].set_value(tau_d(i));
   }
   
   if (outcounter % 2500/update_frequency == 0){

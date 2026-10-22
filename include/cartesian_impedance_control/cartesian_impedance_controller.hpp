@@ -165,6 +165,16 @@ public:
     // Joint-space damping projected into the nullspace [Nms/rad]. 0 = off (real robot: joint
     // friction damps the self-motion). The sim has no joint friction, so the elbow/wrist drift.
     double nullspace_damping_{0.0};
+    // Friction compensation: "none" (default), "lugre" (the upstream model in calculate_tau_friction(),
+    // now scaled with dt), "coulomb" (Coulomb friction in the direction of the impedance torque plus
+    // viscous friction on the measured velocity), "velocity" (Coulomb + viscous friction from the
+    // measured joint velocity only: nothing at rest, so the stiffness stays as set). Identified values below.
+    std::string friction_compensation_{"none"};
+    bool friction_offsets_{true};          // lugre: include offset_friction (asymmetric bias)
+    bool friction_abs_threshold_{false};   // lugre: zero |error| < 0.8 mm (upstream zeroes all negative errors)
+    double friction_scale_{1.0};           // coulomb: scale on the identified friction
+    double friction_tau_eps_{0.3};         // coulomb: tanh width on the impedance torque [Nm]
+    double friction_vel_eps_{0.02};        // velocity: tanh width on the joint velocity [rad/s]
     std::unique_ptr<PinocchioModel> pinocchio_model_;
     bool usePinocchio() const { return model_source_ == "pinocchio"; }
     const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
@@ -173,6 +183,7 @@ public:
     //Impedance control variables              
     Eigen::Matrix<double, 6, 6> Lambda = IDENTITY;                                           // operational space mass matrix
     Eigen::Matrix<double, 6, 1> integrator_weights = (Eigen::VectorXd(6) << 350, 350, 0, 50, 50, 50).finished(); 
+    Eigen::Matrix<double, 6, 1> integrator_limits = (Eigen::VectorXd(6) << 2.5, 2.5, 2.5, 1.5, 1.5, 0.5).finished();  // anti-windup [N, Nm]
     Eigen::Matrix<double, 6, 6> Sm = IDENTITY;                                               // task space selection matrix for positions and rotation
     Eigen::Matrix<double, 6, 6> Sf = Eigen::MatrixXd::Zero(6, 6);                            // task space selection matrix for forces
    
