@@ -19,3 +19,16 @@ cartesian_impedance_controller:
     # nullspace_damping (Nms/rad) is available but not needed once the scene has FR3 joint armature
     # (ci_mpc scripts/isaac/prepare_scene.py); 0 keeps the controller identical to the real robot.
     nullspace_damping: 0.0
+    # Friction handling (ci_mpc docs/PROGRESS.md, 2026-10-22 ablations in the friction scene):
+    # velocity-based friction compensation (nothing at rest, stiffness stays as set) + a fast integral that
+    # only acts near the target (|e| < 3 mm / 0.02, EE < 1 cm/s, not while the output is clamped) and
+    # otherwise decays, so blocked motion or pushes do not wind it up. Steps settle to 0.06-0.38 mm (8 s),
+    # windup jump after a held 15 N push 0.09 mm (unconditional integral: 7 mm). Real robot: not yet.
+    friction_compensation: velocity
+    integrator_weights: [3000.0, 3000.0, 3000.0, 50.0, 50.0, 50.0]
+    integrator_limits: [8.0, 8.0, 8.0, 1.5, 1.5, 0.5]
+    integrator_windows: [0.003, 0.003, 0.003, 0.02, 0.02, 0.02]
+    integrator_velocity_window: 0.01
+    integrator_freeze_on_saturation: true
+    integrator_leak: 2.0
+    integrator_reset_on_target: false

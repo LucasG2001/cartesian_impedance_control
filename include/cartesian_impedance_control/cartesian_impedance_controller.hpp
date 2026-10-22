@@ -184,6 +184,16 @@ public:
     Eigen::Matrix<double, 6, 6> Lambda = IDENTITY;                                           // operational space mass matrix
     Eigen::Matrix<double, 6, 1> integrator_weights = (Eigen::VectorXd(6) << 350, 350, 0, 50, 50, 50).finished(); 
     Eigen::Matrix<double, 6, 1> integrator_limits = (Eigen::VectorXd(6) << 2.5, 2.5, 2.5, 1.5, 1.5, 0.5).finished();  // anti-windup [N, Nm]
+    // Conditional integration (defaults = always integrate, as upstream). A component integrates only while
+    // |error_i| < integrator_windows(i) (0 = no window), the EE speed is below integrator_velocity_window
+    // [m/s] (0 = off) and, with integrator_freeze_on_saturation, its output was not clamped last cycle.
+    // Otherwise it decays with rate integrator_leak [1/s] (0 = holds its value).
+    Eigen::Matrix<double, 6, 1> integrator_windows = Eigen::Matrix<double, 6, 1>::Zero();
+    double integrator_velocity_window_{0.0};
+    double integrator_leak_{0.0};
+    bool integrator_freeze_on_saturation_{false};
+    bool integrator_reset_on_target_{true};  // upstream: new reference_pose zeroes the integral
+    Eigen::Matrix<double, 6, 1> F_saturated_ = Eigen::Matrix<double, 6, 1>::Zero();  // 1 where clamped last cycle
     Eigen::Matrix<double, 6, 6> Sm = IDENTITY;                                               // task space selection matrix for positions and rotation
     Eigen::Matrix<double, 6, 6> Sf = Eigen::MatrixXd::Zero(6, 6);                            // task space selection matrix for forces
    

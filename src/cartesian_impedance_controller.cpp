@@ -91,7 +91,9 @@ void CartesianImpedanceController::reference_pose_callback(const geometry_msgs::
     std::cout << "received reference posistion as " <<  msg->position.x << ", " << msg->position.y << ", " << msg->position.z << std::endl;
     position_d_target_ << msg->position.x, msg->position.y, msg->position.z;
     orientation_d_target_.coeffs() << msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w;
-    I_error.setZero(); //reset integral error when a new target is received 
+    if (integrator_reset_on_target_) {
+      I_error.setZero(); //reset integral error when a new target is received
+    }
     //control_mode = 0; // Set to normal mode when a new pose is received
     
   
@@ -222,6 +224,11 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<double>("nullspace_damping", 0.0);
      auto_declare<std::vector<double>>("integrator_weights", {350, 350, 0, 50, 50, 50});
      auto_declare<std::vector<double>>("integrator_limits", {2.5, 2.5, 2.5, 1.5, 1.5, 0.5});
+     auto_declare<std::vector<double>>("integrator_windows", {0, 0, 0, 0, 0, 0});
+     auto_declare<double>("integrator_velocity_window", 0.0);
+     auto_declare<double>("integrator_leak", 0.0);
+     auto_declare<bool>("integrator_freeze_on_saturation", false);
+     auto_declare<bool>("integrator_reset_on_target", true);
      auto_declare<std::string>("friction_compensation", "none");
      auto_declare<bool>("friction_offsets", true);
      auto_declare<bool>("friction_abs_threshold", false);
@@ -258,6 +265,16 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     }
     integrator_weights = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(weights.data());
     integrator_limits = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(limits.data());
+    const auto windows = get_node()->get_parameter("integrator_windows").as_double_array();
+    if (windows.size() != 6) {
+      RCLCPP_ERROR(get_node()->get_logger(), "integrator_windows needs 6 entries");
+      return CallbackReturn::ERROR;
+    }
+    integrator_windows = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(windows.data());
+    integrator_velocity_window_ = get_node()->get_parameter("integrator_velocity_window").as_double();
+    integrator_leak_ = get_node()->get_parameter("integrator_leak").as_double();
+    integrator_freeze_on_saturation_ = get_node()->get_parameter("integrator_freeze_on_saturation").as_bool();
+    integrator_reset_on_target_ = get_node()->get_parameter("integrator_reset_on_target").as_bool();
     friction_compensation_ = get_node()->get_parameter("friction_compensation").as_string();
     friction_offsets_ = get_node()->get_parameter("friction_offsets").as_bool();
     friction_abs_threshold_ = get_node()->get_parameter("friction_abs_threshold").as_bool();
@@ -460,15 +477,29 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   D.topRightCorner(3,3).setZero();
   D.bottomLeftCorner(3,3).setZero();
   
-  I_error = I_error + integrator_weights.cwiseProduct(error) * dt_; //weighted integral action
+  {
+    const double ee_speed = (J * dq_).head(3).norm();
+    const bool slow = integrator_velocity_window_ <= 0.0 || ee_speed < integrator_velocity_window_;
+    const double decay = std::exp(-integrator_leak_ * dt_);
+    for (int i = 0; i < 6; ++i) {
+      const bool in_window = integrator_windows(i) <= 0.0 || std::abs(error(i)) < integrator_windows(i);
+      const bool frozen = integrator_freeze_on_saturation_ && F_saturated_(i) > 0.5;
+      if (slow && in_window && !frozen) {
+        I_error(i) += integrator_weights(i) * error(i) * dt_; //weighted integral action
+      } else {
+        I_error(i) *= decay;
+      }
+    }
+  }
   //I_error.tail(4).setZero(); //only integrate position error in x and y, not rotation error
   I_error = I_error.cwiseMin(integrator_limits).cwiseMax(-integrator_limits); //anti-windup
  
   F_impedance = -1 * (D * (J * dq_) + K * error + I_error);
+  const Eigen::Matrix<double, 6, 1> F_unclamped = F_impedance;
   F_impedance.head(3) = F_impedance.head(3).cwiseMin(18.0).cwiseMax(-18.0); //clamping forces to avoid instabilities
   F_impedance.tail(3) = F_impedance.tail(3).cwiseMin(9.0).cwiseMax(-9.0); //clamping torques to avoid
-  double value = F_impedance(5);
   F_impedance(5) = std::max(-2.0, std::min(2.0, F_impedance(5))); //clamping torques to avoid
+  F_saturated_ = ((F_unclamped - F_impedance).array().abs() > 1e-9).cast<double>();
 
   Eigen::VectorXd tau_task(7), tau_nullspace(7), tau_d(7);
   //pseudoInverse(J.transpose(), jacobian_transpose_pinv);
