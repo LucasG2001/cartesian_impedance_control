@@ -28,6 +28,8 @@ find_package(std_msgs REQUIRED)
 find_package(messages_fr3 REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(pinocchio REQUIRED)
+find_package(ci_mpc_msgs REQUIRED)
+find_package(realtime_tools REQUIRED)
 
 
 add_library(
@@ -68,6 +70,8 @@ ament_target_dependencies(
         franka_semantic_components
         std_msgs
         messages_fr3
+        ci_mpc_msgs
+        realtime_tools
 )
 
 

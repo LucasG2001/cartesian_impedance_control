@@ -49,6 +49,8 @@
 #include "messages_fr3/srv/set_pose.hpp"
 #include "std_msgs/msg/int16.hpp"
 #include <geometry_msgs/msg/pose.hpp>
+#include <realtime_tools/realtime_buffer.h>
+#include "ci_mpc_msgs/msg/mpc_command.hpp"
 
 #include "franka_semantic_components/franka_robot_model.hpp"
 #include "franka_semantic_components/franka_robot_state.hpp"
@@ -88,6 +90,8 @@ public:
 //subscriptions
   rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr desired_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr control_mode_sub_;
+  rclcpp::Subscription<ci_mpc_msgs::msg::MpcCommand>::SharedPtr mpc_command_sub_;
+  void mpc_command_callback(const ci_mpc_msgs::msg::MpcCommand::SharedPtr msg);
       
 
  private:
@@ -193,6 +197,21 @@ public:
     double integrator_leak_{0.0};
     bool integrator_freeze_on_saturation_{false};
     bool integrator_reset_on_target_{true};  // upstream: new reference_pose zeroes the integral
+    // MPC tracking (ci_mpc_msgs/MpcCommand on /cartesian_impedance_controller/mpc_command): the newest command
+    // sets pose (no reference filter), desired twist (damping on the velocity error), feedforward wrench,
+    // optional K / D and integral gating. Without a new command for mpc_timeout [s] (counted in control
+    // cycles) the controller holds the current pose and drops twist and feedforward wrench.
+    realtime_tools::RealtimeBuffer<ci_mpc_msgs::msg::MpcCommand::SharedPtr> mpc_buffer_;
+    ci_mpc_msgs::msg::MpcCommand::SharedPtr mpc_last_;
+    bool mpc_active_{false};
+    double mpc_age_{0.0};
+    double mpc_timeout_{0.05};
+    double mpc_integral_off_leak_{5.0};    // [1/s] decay of the integral while the command disables it
+    bool integral_enabled_{true};
+    bool mpc_damping_set_{false};
+    Eigen::Matrix<double, 6, 1> mpc_damping_ = Eigen::Matrix<double, 6, 1>::Zero();
+    Eigen::Matrix<double, 6, 1> twist_d_ = Eigen::Matrix<double, 6, 1>::Zero();  // desired EE twist
+    Eigen::Matrix<double, 6, 1> F_ff_ = Eigen::Matrix<double, 6, 1>::Zero();     // feedforward wrench
     Eigen::Matrix<double, 6, 1> F_saturated_ = Eigen::Matrix<double, 6, 1>::Zero();  // 1 where clamped last cycle
     Eigen::Matrix<double, 6, 6> Sm = IDENTITY;                                               // task space selection matrix for positions and rotation
     Eigen::Matrix<double, 6, 6> Sf = Eigen::MatrixXd::Zero(6, 6);                            // task space selection matrix for forces

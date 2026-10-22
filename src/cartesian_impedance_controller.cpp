@@ -99,6 +99,11 @@ void CartesianImpedanceController::reference_pose_callback(const geometry_msgs::
   
 }
 
+void CartesianImpedanceController::mpc_command_callback(const ci_mpc_msgs::msg::MpcCommand::SharedPtr msg)
+{
+  mpc_buffer_.writeFromNonRT(msg);  // applied in update(); a new pointer marks a new command
+}
+
 void CartesianImpedanceController::control_mode_callback(const std_msgs::msg::Int16::SharedPtr msg)
 {
   RCLCPP_INFO(get_node()->get_logger(), "Received Control Mode Callback.");
@@ -229,6 +234,8 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<double>("integrator_leak", 0.0);
      auto_declare<bool>("integrator_freeze_on_saturation", false);
      auto_declare<bool>("integrator_reset_on_target", true);
+     auto_declare<double>("mpc_timeout", 0.05);
+     auto_declare<double>("mpc_integral_off_leak", 5.0);
      auto_declare<std::string>("friction_compensation", "none");
      auto_declare<bool>("friction_offsets", true);
      auto_declare<bool>("friction_abs_threshold", false);
@@ -275,6 +282,8 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     integrator_leak_ = get_node()->get_parameter("integrator_leak").as_double();
     integrator_freeze_on_saturation_ = get_node()->get_parameter("integrator_freeze_on_saturation").as_bool();
     integrator_reset_on_target_ = get_node()->get_parameter("integrator_reset_on_target").as_bool();
+    mpc_timeout_ = get_node()->get_parameter("mpc_timeout").as_double();
+    mpc_integral_off_leak_ = get_node()->get_parameter("mpc_integral_off_leak").as_double();
     friction_compensation_ = get_node()->get_parameter("friction_compensation").as_string();
     friction_offsets_ = get_node()->get_parameter("friction_offsets").as_bool();
     friction_abs_threshold_ = get_node()->get_parameter("friction_abs_threshold").as_bool();
@@ -358,6 +367,17 @@ CallbackReturn CartesianImpedanceController::on_activate(
   // Create the subscriber in the on_activate method
   desired_pose_sub_ = get_node()->create_subscription<geometry_msgs::msg::Pose>(
     "/cartesian_impedance_controller/reference_pose", 1, std::bind(&CartesianImpedanceController::reference_pose_callback, this, std::placeholders::_1));
+
+  // Create the subscriber in the on_activate method
+  mpc_command_sub_ = get_node()->create_subscription<ci_mpc_msgs::msg::MpcCommand>(
+    "/cartesian_impedance_controller/mpc_command", rclcpp::SensorDataQoS(),
+    std::bind(&CartesianImpedanceController::mpc_command_callback, this, std::placeholders::_1));
+  mpc_buffer_.writeFromNonRT(nullptr);
+  mpc_last_.reset();
+  mpc_active_ = false;
+  twist_d_.setZero();
+  F_ff_.setZero();
+  integral_enabled_ = true;
 
   // Create the subscriber in the on_activate method
   control_mode_sub_ = get_node()->create_subscription<std_msgs::msg::Int16>(
@@ -456,6 +476,51 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //                      * Eigen::AngleAxisd(rotation_d_target_[2], Eigen::Vector3d::UnitZ());
 
   
+  // MPC command: newest setpoint, or hold the current pose after mpc_timeout_ without one
+  const auto mpc = *mpc_buffer_.readFromRT();
+  if (mpc && mpc != mpc_last_) {
+    mpc_last_ = mpc;
+    mpc_age_ = 0.0;
+    if (!mpc_active_) {
+      RCLCPP_INFO(get_node()->get_logger(), "MPC tracking active");
+    }
+    mpc_active_ = true;
+    position_d_ << mpc->pose.position.x, mpc->pose.position.y, mpc->pose.position.z;
+    Eigen::Quaterniond q_cmd(mpc->pose.orientation.w, mpc->pose.orientation.x, mpc->pose.orientation.y,
+                             mpc->pose.orientation.z);
+    if (q_cmd.norm() > 1e-6) {
+      orientation_d_ = q_cmd.normalized();
+    }
+    position_d_target_ = position_d_;  // the reference filter then leaves the setpoint unchanged
+    orientation_d_target_ = orientation_d_;
+    twist_d_ << mpc->twist.linear.x, mpc->twist.linear.y, mpc->twist.linear.z, mpc->twist.angular.x,
+        mpc->twist.angular.y, mpc->twist.angular.z;
+    F_ff_ << mpc->wrench.force.x, mpc->wrench.force.y, mpc->wrench.force.z, mpc->wrench.torque.x,
+        mpc->wrench.torque.y, mpc->wrench.torque.z;
+    const Eigen::Map<const Eigen::Matrix<double, 6, 1>> k_cmd(mpc->stiffness.data());
+    if ((k_cmd.array() != 0.0).any()) {
+      K = k_cmd.asDiagonal();
+    }
+    mpc_damping_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(mpc->damping.data());
+    mpc_damping_set_ = (mpc_damping_.array() != 0.0).any();
+    integral_enabled_ = mpc->integral_enabled;
+  } else if (mpc_active_) {
+    mpc_age_ += dt_;
+    if (mpc_age_ > mpc_timeout_) {
+      RCLCPP_WARN(get_node()->get_logger(), "no MPC command for %.0f ms: holding the current pose", mpc_age_ * 1000);
+      mpc_active_ = false;
+      position_d_ = position;
+      position_d_target_ = position;
+      orientation_d_ = orientation;
+      orientation_d_target_ = orientation;
+      twist_d_.setZero();
+      F_ff_.setZero();
+      mpc_damping_set_ = false;
+      integral_enabled_ = true;
+      I_error.setZero();  // built for the old setpoint; at the new one (current pose) no force is needed
+    }
+  }
+
   error.head(3) << position - position_d_;
 
   if (orientation_d_.coeffs().dot(orientation.coeffs()) < 0.0) {
@@ -476,15 +541,18 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //D(3,3) = std::max(D(3,3), 2*std::sqrt(K(3,3))); //minimal rotational damping in z-direction to avoid instabilities
   D.topRightCorner(3,3).setZero();
   D.bottomLeftCorner(3,3).setZero();
+  if (mpc_active_ && mpc_damping_set_) {
+    D = mpc_damping_.asDiagonal();
+  }
   
   {
     const double ee_speed = (J * dq_).head(3).norm();
     const bool slow = integrator_velocity_window_ <= 0.0 || ee_speed < integrator_velocity_window_;
-    const double decay = std::exp(-integrator_leak_ * dt_);
+    const double decay = std::exp(-(integral_enabled_ ? integrator_leak_ : mpc_integral_off_leak_) * dt_);
     for (int i = 0; i < 6; ++i) {
       const bool in_window = integrator_windows(i) <= 0.0 || std::abs(error(i)) < integrator_windows(i);
       const bool frozen = integrator_freeze_on_saturation_ && F_saturated_(i) > 0.5;
-      if (slow && in_window && !frozen) {
+      if (integral_enabled_ && slow && in_window && !frozen) {
         I_error(i) += integrator_weights(i) * error(i) * dt_; //weighted integral action
       } else {
         I_error(i) *= decay;
@@ -494,7 +562,8 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   //I_error.tail(4).setZero(); //only integrate position error in x and y, not rotation error
   I_error = I_error.cwiseMin(integrator_limits).cwiseMax(-integrator_limits); //anti-windup
  
-  F_impedance = -1 * (D * (J * dq_) + K * error + I_error);
+  // twist_d_ and F_ff_ are zero unless an MPC command sets them
+  F_impedance = -1 * (D * (J * dq_ - twist_d_) + K * error + I_error) + F_ff_;
   const Eigen::Matrix<double, 6, 1> F_unclamped = F_impedance;
   F_impedance.head(3) = F_impedance.head(3).cwiseMin(18.0).cwiseMax(-18.0); //clamping forces to avoid instabilities
   F_impedance.tail(3) = F_impedance.tail(3).cwiseMin(9.0).cwiseMax(-9.0); //clamping torques to avoid
