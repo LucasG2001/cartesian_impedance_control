@@ -205,6 +205,11 @@ controller_interface::InterfaceConfiguration CartesianImpedanceController::state
     state_interfaces_config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/velocity");
     //state_interfaces_config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
   }
+  if (usePinocchio() && observer_torque_source_ == "measured") {  // after all position / velocity interfaces
+    for (int i = 1; i <= num_joints; ++i) {
+      state_interfaces_config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
+    }
+  }
 
   if (!usePinocchio()) {
     for (const auto& franka_robot_model_name : franka_robot_model_->get_state_interface_names()) {
@@ -236,6 +241,13 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<bool>("integrator_freeze_on_saturation", false);
      auto_declare<bool>("integrator_reset_on_target", true);
      auto_declare<double>("mpc_timeout", 0.05);
+     auto_declare<double>("observer_gain", 30.0);
+     auto_declare<std::string>("observer_torque_source", "measured");
+     auto_declare<bool>("observer_gravity", false);
+     auto_declare<double>("observer_torque_noise", 0.0);
+     auto_declare<std::vector<double>>("observer_torque_bias", std::vector<double>{});
+     auto_declare<std::vector<double>>("observer_armature", std::vector<double>{});
+     auto_declare<int>("external_wrench_every", 2);
      auto_declare<double>("mpc_integral_off_leak", 5.0);
      auto_declare<std::string>("friction_compensation", "none");
      auto_declare<bool>("friction_offsets", true);
@@ -284,6 +296,35 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     integrator_freeze_on_saturation_ = get_node()->get_parameter("integrator_freeze_on_saturation").as_bool();
     integrator_reset_on_target_ = get_node()->get_parameter("integrator_reset_on_target").as_bool();
     mpc_timeout_ = get_node()->get_parameter("mpc_timeout").as_double();
+    observer_gain_ = get_node()->get_parameter("observer_gain").as_double();
+    observer_torque_source_ = get_node()->get_parameter("observer_torque_source").as_string();
+    observer_gravity_ = get_node()->get_parameter("observer_gravity").as_bool();
+    observer_torque_noise_ = get_node()->get_parameter("observer_torque_noise").as_double();
+    {
+      const auto bias = get_node()->get_parameter("observer_torque_bias").as_double_array();
+      if (bias.size() == 7) {
+        observer_torque_bias_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(bias.data());
+      } else if (!bias.empty()) {
+        RCLCPP_ERROR(get_node()->get_logger(), "observer_torque_bias needs 7 entries");
+        return CallbackReturn::ERROR;
+      }
+    }
+    if (observer_torque_source_ != "measured" && observer_torque_source_ != "command") {
+      RCLCPP_ERROR(get_node()->get_logger(), "observer_torque_source must be measured or command");
+      return CallbackReturn::ERROR;
+    }
+    {
+      const auto arm = get_node()->get_parameter("observer_armature").as_double_array();
+      if (arm.size() == 7) {
+        observer_armature_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(arm.data());
+      } else if (!arm.empty()) {
+        RCLCPP_ERROR(get_node()->get_logger(), "observer_armature needs 7 entries");
+        return CallbackReturn::ERROR;
+      }
+    }
+    wrench_pub_every_ = std::max<int>(1, get_node()->get_parameter("external_wrench_every").as_int());
+    wrench_pub_ = std::make_shared<realtime_tools::RealtimePublisher<geometry_msgs::msg::WrenchStamped>>(
+        get_node()->create_publisher<geometry_msgs::msg::WrenchStamped>("~/external_wrench", 10));
     mpc_integral_off_leak_ = get_node()->get_parameter("mpc_integral_off_leak").as_double();
     friction_compensation_ = get_node()->get_parameter("friction_compensation").as_string();
     friction_offsets_ = get_node()->get_parameter("friction_offsets").as_bool();
@@ -399,6 +440,48 @@ controller_interface::CallbackReturn CartesianImpedanceController::on_deactivate
   return CallbackReturn::SUCCESS;
 }
 
+void CartesianImpedanceController::updateExternalWrench(const Eigen::Matrix<double, 7, 7>& M_model,
+                                                       const Eigen::Matrix<double, 7, 1>& coriolis,
+                                                       const Eigen::Matrix<double, 7, 1>& tau_applied) {
+  const bool measured = observer_torque_source_ == "measured";
+  Eigen::Matrix<double, 7, 7> M = M_model;
+  if (!measured) {
+    M.diagonal() += observer_armature_;  // the commanded torque also accelerates the rotors
+  }
+  const Eigen::Matrix<double, 7, 1> p = M * dq_;
+  if (!observer_initialized_) {
+    observer_initialized_ = true;
+    observer_M_prev_ = M;
+    observer_p0_ = p;
+    observer_integral_.setZero();
+    tau_ext_hat_.setZero();
+    return;
+  }
+  observer_M_prev_ = M;
+  (void)coriolis;
+  const Eigen::Matrix<double, 7, 1> ct_dq = pinocchio_model_->coriolis_transpose_dq();
+  const Eigen::Matrix<double, 7, 1> g = observer_gravity_ ? pinocchio_model_->gravity()
+                                                          : Eigen::Matrix<double, 7, 1>::Zero();
+  observer_integral_ += (tau_applied + ct_dq - g + tau_ext_hat_) * dt_;
+  tau_ext_hat_ = observer_gain_ * (p - observer_integral_ - observer_p0_);
+  // wrench at the EE frame: tau_ext = J^T F_env  ->  F_env = (J J^T)^-1 J tau_ext; Franka sign: robot on environment
+  const Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
+  F_ext_hat_ = -JJt.ldlt().solve(J * tau_ext_hat_);
+  F_ext = F_ext_hat_;
+  if (wrench_pub_ && outcounter % wrench_pub_every_ == 0 && wrench_pub_->trylock()) {
+    auto& msg = wrench_pub_->msg_;
+    msg.header.stamp = get_node()->now();
+    msg.header.frame_id = arm_id_ + "_link0";
+    msg.wrench.force.x = F_ext_hat_(0);
+    msg.wrench.force.y = F_ext_hat_(1);
+    msg.wrench.force.z = F_ext_hat_(2);
+    msg.wrench.torque.x = F_ext_hat_(3);
+    msg.wrench.torque.y = F_ext_hat_(4);
+    msg.wrench.torque.z = F_ext_hat_(5);
+    wrench_pub_->unlockAndPublish();
+  }
+}
+
 std::array<double, 6> CartesianImpedanceController::convertToStdArray(const geometry_msgs::msg::WrenchStamped& wrench) {
     std::array<double, 6> result;
     result[0] = wrench.wrench.force.x;
@@ -472,6 +555,16 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   Eigen::Matrix<double, 7, 1> coriolis;
   Eigen::Affine3d transform;
   computeModel(M, coriolis, transform);
+  if (usePinocchio()) {
+    Eigen::Matrix<double, 7, 1> tau = tau_J_d_M;  // command applied during the last period
+    if (observer_torque_source_ == "measured") {
+      for (int i = 0; i < num_joints; ++i) {
+        tau(i) = state_interfaces_.at(2 * num_joints + i).get_value() + observer_torque_bias_(i) +
+                 observer_torque_noise_ * observer_normal_(observer_rng_);
+      }
+    }
+    updateExternalWrench(M, coriolis, tau);
+  }
   Eigen::Vector3d position(transform.translation());
   Eigen::Quaterniond orientation(transform.rotation());
   //orientation_d_target_ = Eigen::AngleAxisd(rotation_d_target_[0], Eigen::Vector3d::UnitX())

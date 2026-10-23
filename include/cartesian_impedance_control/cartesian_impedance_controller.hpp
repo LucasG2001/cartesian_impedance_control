@@ -20,6 +20,7 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <random>
 #include <mutex>
 #include <string>
 #include <unistd.h>
@@ -50,6 +51,8 @@
 #include "std_msgs/msg/int16.hpp"
 #include <geometry_msgs/msg/pose.hpp>
 #include <realtime_tools/realtime_buffer.h>
+#include <realtime_tools/realtime_publisher.h>
+#include <geometry_msgs/msg/wrench_stamped.hpp>
 #include "ci_mpc_msgs/msg/mpc_command.hpp"
 
 #include "franka_semantic_components/franka_robot_model.hpp"
@@ -202,6 +205,36 @@ public:
     // optional K / D and integral gating. Without a new command for mpc_timeout [s] (counted in control
     // cycles) the controller holds the current pose and drops twist and feedforward wrench.
     realtime_tools::RealtimeBuffer<ci_mpc_msgs::msg::MpcCommand::SharedPtr> mpc_buffer_;
+    // External wrench estimate (model_source pinocchio; the real robot also has Franka's O_F_ext_hat_K): generalized
+    // momentum observer r = K_O (M dq - int(tau + C^T dq - g + r) dt - p0); wrench at the EE frame = -pinv(J^T) r
+    // in Franka's sign convention (force of the robot on the environment positive). tau (observer_torque_source):
+    //   measured: the joints' effort state = link-side joint torque (FR3 torque sensors; Isaac: the torque PhysX
+    //             transmits through the joint), friction stays out; M without rotor inertia; g if
+    //             observer_gravity (FR3: tau_J includes gravity; sim: robot gravity is off);
+    //   command:  the commanded torque; joint friction not cancelled by the compensation (stiction at rest) shows
+    //             up in it (sim, known wrench at rest: 2-4.7 N off on the other axes); M + observer_armature.
+    // Published on ~/external_wrench (geometry_msgs/WrenchStamped, base frame) and fed into F_ext (mode 1).
+    std::string observer_torque_source_{"measured"};
+    // sim only: torque sensor model added to the measured torques (Isaac's are exact): white noise [Nm] and a
+    // per-joint offset [Nm] (FR3 torque sensors drift / have offsets; values assumed, to be measured on the robot)
+    double observer_torque_noise_{0.0};
+    Eigen::Matrix<double, 7, 1> observer_torque_bias_ = Eigen::Matrix<double, 7, 1>::Zero();
+    std::mt19937 observer_rng_{12345};
+    std::normal_distribution<double> observer_normal_{0.0, 1.0};
+    bool observer_gravity_{false};
+    double observer_gain_{30.0};
+    // rotor inertia added to M for the observer only (the impedance law keeps its tuned M / Lambda)
+    Eigen::Matrix<double, 7, 1> observer_armature_ = Eigen::Matrix<double, 7, 1>::Zero();
+    bool observer_initialized_{false};
+    Eigen::Matrix<double, 7, 7> observer_M_prev_ = Eigen::Matrix<double, 7, 7>::Zero();
+    Eigen::Matrix<double, 7, 1> observer_integral_ = Eigen::Matrix<double, 7, 1>::Zero();
+    Eigen::Matrix<double, 7, 1> observer_p0_ = Eigen::Matrix<double, 7, 1>::Zero();
+    Eigen::Matrix<double, 7, 1> tau_ext_hat_ = Eigen::Matrix<double, 7, 1>::Zero();
+    Eigen::Matrix<double, 6, 1> F_ext_hat_ = Eigen::Matrix<double, 6, 1>::Zero();
+    std::shared_ptr<realtime_tools::RealtimePublisher<geometry_msgs::msg::WrenchStamped>> wrench_pub_;
+    int wrench_pub_every_{2};
+    void updateExternalWrench(const Eigen::Matrix<double, 7, 7>& M, const Eigen::Matrix<double, 7, 1>& coriolis,
+                              const Eigen::Matrix<double, 7, 1>& tau_applied);
     ci_mpc_msgs::msg::MpcCommand::SharedPtr mpc_last_;
     bool mpc_active_{false};
     double mpc_age_{0.0};

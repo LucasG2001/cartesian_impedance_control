@@ -10,6 +10,8 @@
 // Conventions match libfranka:
 //   mass()      M(q), 7x7
 //   coriolis()  C(q, dq) * dq, 7x1, gravity NOT included
+//   coriolis_transpose_dq()  C(q, dq)^T * dq (momentum observer)
+//   gravity()   g(q) (only for an observer on measured link torques, which include gravity on the FR3)
 //   jacobian()  6x7, rows [linear; angular], expressed in the base frame,
 //               reference point = end-effector frame origin  (= getZeroJacobian)
 //   pose()      end-effector pose in the base frame          (= getPoseMatrix)
@@ -47,6 +49,8 @@ class __attribute__((visibility("default"))) PinocchioModel {
 
   const Eigen::Matrix<double, 7, 7>& mass() const { return M_; }
   const Eigen::Matrix<double, 7, 1>& coriolis() const { return coriolis_; }
+  const Eigen::Matrix<double, 7, 1>& coriolis_transpose_dq() const { return coriolis_transpose_dq_; }
+  const Eigen::Matrix<double, 7, 1>& gravity() const { return gravity_; }
   const Eigen::Matrix<double, 6, 7>& jacobian() const { return J_; }
   const Eigen::Affine3d& pose() const { return pose_; }
 
@@ -56,6 +60,8 @@ class __attribute__((visibility("default"))) PinocchioModel {
 
   Eigen::Matrix<double, 7, 7> M_ = Eigen::Matrix<double, 7, 7>::Identity();
   Eigen::Matrix<double, 7, 1> coriolis_ = Eigen::Matrix<double, 7, 1>::Zero();
+  Eigen::Matrix<double, 7, 1> coriolis_transpose_dq_ = Eigen::Matrix<double, 7, 1>::Zero();
+  Eigen::Matrix<double, 7, 1> gravity_ = Eigen::Matrix<double, 7, 1>::Zero();
   Eigen::Matrix<double, 6, 7> J_ = Eigen::Matrix<double, 6, 7>::Zero();
   Eigen::Affine3d pose_ = Eigen::Affine3d::Identity();
 };

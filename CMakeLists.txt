@@ -30,6 +30,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(ci_mpc_msgs REQUIRED)
 find_package(realtime_tools REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 
 add_library(
@@ -72,6 +73,7 @@ ament_target_dependencies(
         messages_fr3
         ci_mpc_msgs
         realtime_tools
+        geometry_msgs
 )
 
 

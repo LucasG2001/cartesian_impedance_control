@@ -100,6 +100,8 @@ void PinocchioModel::compute(const Eigen::Matrix<double, 7, 1>& q,
   // Coriolis/centrifugal vector C(q, dq) dq, without gravity.
   pinocchio::computeCoriolisMatrix(m, d, impl_->q, impl_->v);
   const Eigen::VectorXd c = d.C * impl_->v;
+  const Eigen::VectorXd ct = d.C.transpose() * impl_->v;  // for the momentum observer
+  const Eigen::VectorXd g = pinocchio::computeGeneralizedGravity(m, d, impl_->q);
 
   // Kinematics, end-effector pose and Jacobian.
   pinocchio::computeJointJacobians(m, d, impl_->q);  // also runs forward kinematics
@@ -111,6 +113,8 @@ void PinocchioModel::compute(const Eigen::Matrix<double, 7, 1>& q,
   for (int i = 0; i < 7; ++i) {
     const int vi = impl_->v_idx[i];
     coriolis_[i] = c[vi];
+    coriolis_transpose_dq_[i] = ct[vi];
+    gravity_[i] = g[vi];
     J_.col(i) = impl_->J_full.col(vi);
     for (int k = 0; k < 7; ++k) {
       M_(i, k) = d.M(vi, impl_->v_idx[k]);

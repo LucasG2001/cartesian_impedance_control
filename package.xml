@@ -19,6 +19,7 @@
   <depend>pinocchio</depend>
   <depend>ci_mpc_msgs</depend>
   <depend>realtime_tools</depend>
+  <depend>geometry_msgs</depend>
 
 
   <exec_depend>franka_description</exec_depend>

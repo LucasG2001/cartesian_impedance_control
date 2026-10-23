@@ -24,6 +24,16 @@ cartesian_impedance_controller:
     # only acts near the target (|e| < 3 mm / 0.02, EE < 1 cm/s, not while the output is clamped) and
     # otherwise decays, so blocked motion or pushes do not wind it up. Steps settle to 0.06-0.38 mm (8 s),
     # windup jump after a held 15 N push 0.09 mm (unconditional integral: 7 mm). Real robot: not yet.
+    # external wrench estimate (momentum observer, ~/external_wrench, Franka sign convention) on the measured link-side
+    # joint torques (Isaac effort state = torque transmitted through the joint, like the FR3 torque sensors; known
+    # wrench at rest: exact). observer_armature only applies to observer_torque_source: command.
+    observer_gain: 30.0
+    observer_torque_source: measured
+    observer_gravity: false
+    # torque sensor model (assumed until measured on the FR3): noise 0.05 Nm, fixed offsets up to 0.15 Nm
+    observer_torque_noise: 0.05
+    observer_torque_bias: [0.10, -0.15, 0.08, 0.12, -0.05, 0.06, -0.03]
+    observer_armature: [0.60571, 0.60571, 0.46247, 0.46247, 0.20554, 0.20554, 0.20554]
     friction_compensation: velocity
     integrator_weights: [3000.0, 3000.0, 3000.0, 50.0, 50.0, 50.0]
     integrator_limits: [8.0, 8.0, 8.0, 1.5, 1.5, 0.5]
