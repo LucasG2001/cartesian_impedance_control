@@ -1,4 +1,7 @@
-# Real FR3 via franka_hardware (libfranka): robot model from the franka_robot_model interfaces.
+# Real FR3 via franka_hardware (libfranka): robot model from the franka_robot_model interfaces
+# (EE = franka::Frame::kEndEffector, the TCP of the active Desk end-effector profile).
+# Use with franka_bringup franka.launch.py (registers the controller type) and
+#   ros2 run controller_manager spawner cartesian_impedance_controller --param-file <this file>
 controller_manager:
   ros__parameters:
     update_rate: 1000  # Hz
@@ -9,4 +12,19 @@ cartesian_impedance_controller:
   ros__parameters:
     arm_id: fr3
     model_source: franka
-    enable_input_server: true
+    enable_input_server: false
+    nullspace_damping: 0.0
+    observer_gain: 30.0
+    observer_torque_source: measured
+    observer_gravity: false
+    # bring-up: no friction compensation until the ramp in ci_mpc/docs/REAL_ROBOT.md section 4
+    friction_compensation: none
+    # integral as in Isaac (only active in free space; MpcCommand.integral_enabled false switches it off)
+    integrator_weights: [3000.0, 3000.0, 3000.0, 50.0, 50.0, 50.0]
+    integrator_limits: [8.0, 8.0, 8.0, 1.5, 1.5, 0.5]
+    integrator_windows: [0.003, 0.003, 0.003, 0.02, 0.02, 0.02]
+    integrator_velocity_window: 0.01
+    integrator_freeze_on_saturation: true
+    integrator_leak: 2.0
+    integrator_reset_on_target: false
+    mpc_timeout: 0.05
