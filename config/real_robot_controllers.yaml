@@ -28,3 +28,7 @@ cartesian_impedance_controller:
     integrator_leak: 2.0
     integrator_reset_on_target: false
     mpc_timeout: 0.05
+    # half the default rotational damping (1.3 x critical, z floor 2 sqrt(K)): with the defaults the wrist rang at
+    # 30-40 Hz after MPC moves (ci_mpc PROGRESS 2026-10-28); mpc_real.yaml commands the same D while the MPC runs
+    rotational_damping_scale: 0.65
+    rz_damping_floor: 0.5

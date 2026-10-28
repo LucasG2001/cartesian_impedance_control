@@ -255,6 +255,14 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<double>("friction_scale", 1.0);
      auto_declare<double>("friction_tau_eps", 0.3);
      auto_declare<double>("friction_vel_eps", 0.02);
+     // per-joint identified values (7 each; empty = the header values): coulomb / velocity modes
+     auto_declare<std::vector<double>>("friction_coulomb", std::vector<double>{});
+     auto_declare<std::vector<double>>("friction_viscous", std::vector<double>{});
+     // constant joint torque added to the command in every mode (e.g. a gravity-model shortfall; empty = none)
+     auto_declare<std::vector<double>>("joint_torque_offset", std::vector<double>{});
+     // rotational damping: D_rot = rotational_damping_scale * 2 sqrt(K Lambda), D_rz >= rz_damping_floor * 2 sqrt(K_rz)
+     auto_declare<double>("rotational_damping_scale", 1.3);
+     auto_declare<double>("rz_damping_floor", 1.0);
    } catch (const std::exception& e) {
      RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
      return CallbackReturn::ERROR;
@@ -332,6 +340,18 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     friction_scale_ = get_node()->get_parameter("friction_scale").as_double();
     friction_tau_eps_ = get_node()->get_parameter("friction_tau_eps").as_double();
     friction_vel_eps_ = get_node()->get_parameter("friction_vel_eps").as_double();
+    for (const auto& [name, target] : {std::pair<std::string, Eigen::Matrix<double, 7, 1>*>{"friction_coulomb", &coulomb_friction},
+                                       {"friction_viscous", &beta}, {"joint_torque_offset", &joint_torque_offset_}}) {
+      const auto v = get_node()->get_parameter(name).as_double_array();
+      if (v.size() == 7) {
+        *target = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(v.data());
+      } else if (!v.empty()) {
+        RCLCPP_ERROR(get_node()->get_logger(), "%s needs 7 entries", name.c_str());
+        return CallbackReturn::ERROR;
+      }
+    }
+    rotational_damping_scale_ = get_node()->get_parameter("rotational_damping_scale").as_double();
+    rz_damping_floor_ = get_node()->get_parameter("rz_damping_floor").as_double();
     if (friction_compensation_ != "none" && friction_compensation_ != "lugre" && friction_compensation_ != "coulomb" &&
         friction_compensation_ != "velocity") {
       RCLCPP_ERROR(get_node()->get_logger(), "friction_compensation must be none, lugre, coulomb or velocity");
@@ -631,8 +651,10 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   // correcting D to be critically damped
   D =  2.0 * K.cwiseMax(0.0).cwiseSqrt() * Lambda.cwiseMax(0.0).diagonal().cwiseSqrt().asDiagonal();
-  D.bottomRightCorner(3,3) *= 1.3; //increase rotational damping a bit
-  D(5,5) = std::max(D(5,5), 2*std::sqrt(K(5,5))); //minimal rotational damping in z-direction to avoid instabilities
+  D.bottomRightCorner(3,3) *= rotational_damping_scale_; //increase rotational damping a bit (default 1.3)
+  // minimal rotational damping in z-direction to avoid instabilities (default floor 2 sqrt(K); real FR3: the 1.3 x and
+  // the floor made the wrist ring at 30-40 Hz, 2026-10-28)
+  D(5,5) = std::max(D(5,5), rz_damping_floor_ * 2 * std::sqrt(K(5,5)));
   //D(4,4) = std::max(D(4,4), 2*std::sqrt(K(4,4))); //minimal rotational damping in z-direction to avoid instabilities
   //D(3,3) = std::max(D(3,3), 2*std::sqrt(K(3,3))); //minimal rotational damping in z-direction to avoid instabilities
   D.topRightCorner(3,3).setZero();
@@ -698,7 +720,7 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     }
   }
   // friction compensation goes through the torque-rate limit too (upstream added it after the limit)
-  tau_d << tau_impedance + tau_nullspace + coriolis + tau_friction; //add nullspace and coriolis components to desired torque
+  tau_d << tau_impedance + tau_nullspace + coriolis + tau_friction + joint_torque_offset_; //add nullspace and coriolis components to desired torque
   tau_d << saturateTorqueRate(tau_d, tau_J_d_M);  // Saturate torque rate to avoid discontinuities
   tau_J_d_M = tau_d;
 

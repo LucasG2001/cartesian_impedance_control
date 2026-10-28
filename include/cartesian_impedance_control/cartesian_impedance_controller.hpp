@@ -182,6 +182,9 @@ public:
     double friction_scale_{1.0};           // coulomb: scale on the identified friction
     double friction_tau_eps_{0.3};         // coulomb: tanh width on the impedance torque [Nm]
     double friction_vel_eps_{0.02};        // velocity: tanh width on the joint velocity [rad/s]
+    Eigen::Matrix<double, 7, 1> joint_torque_offset_ = Eigen::Matrix<double, 7, 1>::Zero();  // added to tau_d [Nm]
+    double rotational_damping_scale_{1.3};  // D_rot = scale * 2 sqrt(K Lambda)
+    double rz_damping_floor_{1.0};          // D_rz >= floor * 2 sqrt(K_rz)
     std::unique_ptr<PinocchioModel> pinocchio_model_;
     bool usePinocchio() const { return model_source_ == "pinocchio"; }
     const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
