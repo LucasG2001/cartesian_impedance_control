@@ -205,7 +205,7 @@ controller_interface::InterfaceConfiguration CartesianImpedanceController::state
     state_interfaces_config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/velocity");
     //state_interfaces_config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
   }
-  if (usePinocchio() && observer_torque_source_ == "measured") {  // after all position / velocity interfaces
+  if ((usePinocchio() || observer_side_model_) && observer_torque_source_ == "measured") {  // after all position / velocity interfaces
     for (int i = 1; i <= num_joints; ++i) {
       state_interfaces_config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
     }
@@ -244,6 +244,9 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<double>("observer_gain", 30.0);
      auto_declare<std::string>("observer_torque_source", "measured");
      auto_declare<bool>("observer_gravity", false);
+     // model_source franka (real robot): build a Pinocchio side model (urdf_path) only for the momentum observer
+     // (~/external_wrench); it uses the measured joint torques minus franka's gravity (with the Desk load)
+     auto_declare<bool>("observer_side_model", false);
      auto_declare<double>("observer_torque_noise", 0.0);
      auto_declare<std::vector<double>>("observer_torque_bias", std::vector<double>{});
      auto_declare<std::vector<double>>("observer_armature", std::vector<double>{});
@@ -378,6 +381,26 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
       franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
       franka_semantic_components::FrankaRobotModel(arm_id_ + "/" + k_robot_model_interface_name,
                                                    arm_id_ + "/" + k_robot_state_interface_name));
+      observer_side_model_ = get_node()->get_parameter("observer_side_model").as_bool();
+      if (observer_side_model_) {
+        if (observer_torque_source_ != "measured" || observer_gravity_) {
+          RCLCPP_ERROR(get_node()->get_logger(),
+                       "observer_side_model needs observer_torque_source measured and observer_gravity false");
+          return CallbackReturn::ERROR;
+        }
+        std::vector<std::string> arm_joints;
+        for (int i = 1; i <= num_joints; ++i) {
+          arm_joints.push_back(arm_id_ + "_joint" + std::to_string(i));
+        }
+        try {
+          pinocchio_model_ = std::make_unique<PinocchioModel>(urdf_path_, arm_joints, ee_frame_, std::vector<double>{});
+        } catch (const std::exception& e) {
+          RCLCPP_ERROR(get_node()->get_logger(), "observer side model from '%s': %s", urdf_path_.c_str(), e.what());
+          return CallbackReturn::ERROR;
+        }
+        RCLCPP_INFO(get_node()->get_logger(), "Observer side model: pinocchio (%s) with franka mass / gravity",
+                    urdf_path_.c_str());
+      }
     } else {
       RCLCPP_ERROR(get_node()->get_logger(), "Unknown model_source '%s' (expected 'franka' or 'pinocchio')",
                    model_source_.c_str());
@@ -418,6 +441,7 @@ CallbackReturn CartesianImpedanceController::on_activate(
   computeModel(M, coriolis, initial_transform);
   tau_J_d_M.setZero();
   I_error.setZero();
+  observer_initialized_ = false;  // momentum observer restarts from the current state (also after re-activation)
   position_d_ = initial_transform.translation();
   orientation_d_ = Eigen::Quaterniond(initial_transform.rotation());
   position_d_target_ = position_d_;
@@ -582,6 +606,15 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
         tau(i) = state_interfaces_.at(2 * num_joints + i).get_value() + observer_torque_bias_(i) +
                  observer_torque_noise_ * observer_normal_(observer_rng_);
       }
+    }
+    updateExternalWrench(M, coriolis, tau);
+  } else if (observer_side_model_) {
+    // real robot: the measured link torques include gravity; franka's gravity vector has the Desk load
+    pinocchio_model_->compute(q_, dq_);  // coriolis_transpose_dq() for the observer
+    const std::array<double, 7> g = franka_robot_model_->getGravityForceVector();
+    Eigen::Matrix<double, 7, 1> tau;
+    for (int i = 0; i < num_joints; ++i) {
+      tau(i) = state_interfaces_.at(2 * num_joints + i).get_value() - g[i] + observer_torque_bias_(i);
     }
     updateExternalWrench(M, coriolis, tau);
   }

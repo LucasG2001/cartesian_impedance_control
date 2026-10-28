@@ -187,6 +187,7 @@ public:
     double rz_damping_floor_{1.0};          // D_rz >= floor * 2 sqrt(K_rz)
     std::unique_ptr<PinocchioModel> pinocchio_model_;
     bool usePinocchio() const { return model_source_ == "pinocchio"; }
+    bool observer_side_model_{false};  // franka model + Pinocchio side model for the observer only (real robot)
     const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
     double dt_ = 0.001;                // control period [s], set from update()'s period
                 

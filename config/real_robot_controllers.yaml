@@ -17,6 +17,11 @@ cartesian_impedance_controller:
     observer_gain: 30.0
     observer_torque_source: measured
     observer_gravity: false
+    # momentum observer (~/external_wrench) on the real arm: Pinocchio side model for C^T dq, franka mass / gravity
+    # (with the Desk load); without it the observer never ran with model_source franka (2026-10-28). Untested on the robot.
+    observer_side_model: true
+    urdf_path: /home/njohnson/ci_mpc_assets/fr3.urdf
+    ee_frame: fr3_hand_tcp
     # bring-up: no friction compensation until the ramp in ci_mpc/docs/REAL_ROBOT.md section 4
     friction_compensation: none
     # integral as in Isaac (only active in free space; MpcCommand.integral_enabled false switches it off)
