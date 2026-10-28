@@ -258,6 +258,10 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<double>("friction_scale", 1.0);
      auto_declare<double>("friction_tau_eps", 0.3);
      auto_declare<double>("friction_vel_eps", 0.02);
+     // hybrid: velocity-direction compensation (friction_scale) while a joint moves, fading into torque-direction
+     // compensation (friction_scale_rest) at rest: coulomb at rest lowers the breakaway, but switching on the torque
+     // sign during motion made the real arm wobble (2026-10-28)
+     auto_declare<double>("friction_scale_rest", 0.5);
      // per-joint identified values (7 each; empty = the header values): coulomb / velocity modes
      auto_declare<std::vector<double>>("friction_coulomb", std::vector<double>{});
      auto_declare<std::vector<double>>("friction_viscous", std::vector<double>{});
@@ -343,6 +347,7 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     friction_scale_ = get_node()->get_parameter("friction_scale").as_double();
     friction_tau_eps_ = get_node()->get_parameter("friction_tau_eps").as_double();
     friction_vel_eps_ = get_node()->get_parameter("friction_vel_eps").as_double();
+    friction_scale_rest_ = get_node()->get_parameter("friction_scale_rest").as_double();
     for (const auto& [name, target] : {std::pair<std::string, Eigen::Matrix<double, 7, 1>*>{"friction_coulomb", &coulomb_friction},
                                        {"friction_viscous", &beta}, {"joint_torque_offset", &joint_torque_offset_}}) {
       const auto v = get_node()->get_parameter(name).as_double_array();
@@ -356,8 +361,8 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     rotational_damping_scale_ = get_node()->get_parameter("rotational_damping_scale").as_double();
     rz_damping_floor_ = get_node()->get_parameter("rz_damping_floor").as_double();
     if (friction_compensation_ != "none" && friction_compensation_ != "lugre" && friction_compensation_ != "coulomb" &&
-        friction_compensation_ != "velocity") {
-      RCLCPP_ERROR(get_node()->get_logger(), "friction_compensation must be none, lugre, coulomb or velocity");
+        friction_compensation_ != "velocity" && friction_compensation_ != "hybrid") {
+      RCLCPP_ERROR(get_node()->get_logger(), "friction_compensation must be none, lugre, coulomb, velocity or hybrid");
       return CallbackReturn::ERROR;
     }
 
@@ -750,6 +755,13 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     for (int i = 0; i < 7; ++i) {
       tau_friction(i) = friction_scale_ * (coulomb_friction(i) * std::tanh(dq_(i) / friction_vel_eps_) +
                                            beta(i) * dq_(i));
+    }
+  } else if (friction_compensation_ == "hybrid") {
+    for (int i = 0; i < 7; ++i) {
+      const double s = std::tanh(dq_(i) / friction_vel_eps_);  // ~sign(dq) when moving, ~0 at rest
+      tau_friction(i) = coulomb_friction(i) * (friction_scale_ * s + (1.0 - std::abs(s)) * friction_scale_rest_ *
+                                                                        std::tanh(tau_impedance(i) / friction_tau_eps_)) +
+                        friction_scale_ * beta(i) * dq_(i);
     }
   }
   // friction compensation goes through the torque-rate limit too (upstream added it after the limit)
