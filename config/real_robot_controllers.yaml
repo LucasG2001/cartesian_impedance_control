@@ -13,7 +13,9 @@ cartesian_impedance_controller:
     arm_id: fr3
     model_source: franka
     enable_input_server: false
-    nullspace_damping: 0.0
+    # hybrid compensation cancels the joint friction that held the elbow: with 0 the hold showed a 1.7 Hz nullspace
+    # swing (j1 / j3 12 mrad p2p, hand still); 2.0 -> 0.02 mrad, hold drift 0.01 mm (real FR3, 2026-10-29)
+    nullspace_damping: 2.0
     observer_gain: 30.0
     observer_torque_source: measured
     observer_gravity: false
