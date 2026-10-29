@@ -22,8 +22,19 @@ cartesian_impedance_controller:
     observer_side_model: true
     urdf_path: /home/njohnson/ci_mpc_assets/fr3.urdf
     ee_frame: fr3_hand_tcp
-    # bring-up: no friction compensation until the ramp in ci_mpc/docs/REAL_ROBOT.md section 4
-    friction_compensation: none
+    # hybrid friction compensation (user decision 2026-10-29): velocity direction x 0.75 while a joint moves, torque
+    # direction x 0.5 at rest, also in contact. Real FR3: velocity 0.75 = the ramp optimum (1.0 over-compensated), circle
+    # 0.52-0.62 mm; coulomb 0.5 halves the breakaway. Held-out sim (realfric vs none): D1 30/30 vs 10/10 (16.9 vs 16.0 s),
+    # H1 15/15 4.9 s faster (p 0.015), H2 3/5 vs 1/5, H3 23/36 vs 15/36 (p 0.077); pre-seat force ~2 N higher, ~3x
+    # in-hand slip. First real contact runs: check the 4 N gate; over it -> friction_scale_rest 0 (= velocity mode).
+    friction_compensation: hybrid
+    friction_scale: 0.75
+    friction_scale_rest: 0.5
+    # identified on this FR3 (ci_mpc_sysid/results/real_fr3_20261028.yaml, 3 poses; j5 viscous fits negative -> 0)
+    friction_coulomb: [0.815, 0.701, 0.770, 0.882, 1.159, 0.713, 0.395]
+    friction_viscous: [0.41, 0.618, 0.393, 0.994, 0.0, 0.279, 0.075]
+    # gravity-model error (j2 -0.66 Nm made joint 2 sink under zero torque)
+    joint_torque_offset: [0.089, -0.658, 0.033, 0.232, -0.056, 0.230, -0.025]
     # integral as in Isaac (only active in free space; MpcCommand.integral_enabled false switches it off)
     integrator_weights: [3000.0, 3000.0, 3000.0, 50.0, 50.0, 50.0]
     integrator_limits: [8.0, 8.0, 8.0, 1.5, 1.5, 0.5]
