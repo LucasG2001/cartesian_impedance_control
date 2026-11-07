@@ -172,6 +172,11 @@ public:
     // Joint-space damping projected into the nullspace [Nms/rad]. 0 = off (real robot: joint
     // friction damps the self-motion). The sim has no joint friction, so the elbow/wrist drift.
     double nullspace_damping_{0.0};
+    // Joint posture spring in the nullspace [Nm/rad]. 0 = off (default, unchanged behaviour). Target: nullspace_q_d
+    // (7 values) or the joint pose at activation.
+    double nullspace_posture_stiffness_{0.0};
+    std::vector<double> nullspace_q_d_param_;
+    Eigen::Matrix<double, 7, 1> q_posture_d_ = Eigen::Matrix<double, 7, 1>::Zero();
     // Friction compensation: "none" (default), "lugre" (the upstream model in calculate_tau_friction(),
     // now scaled with dt), "coulomb" (Coulomb friction in the direction of the impedance torque plus
     // viscous friction on the measured velocity), "velocity" (Coulomb + viscous friction from the

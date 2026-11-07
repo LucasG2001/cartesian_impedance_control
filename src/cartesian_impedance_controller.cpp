@@ -36,8 +36,9 @@ std::ostream& operator<<(std::ostream& ostream, const std::array<T, N>& array) {
 namespace cartesian_impedance_control {
 
 
-inline void pseudoInverse(const Eigen::MatrixXd& M_, Eigen::MatrixXd& M_pinv_, bool damped = true) {
-  double lambda_ = damped ? 0.2 : 0.0;
+inline void pseudoInverse(const Eigen::MatrixXd& M_, Eigen::MatrixXd& M_pinv_, bool damped = true,
+                          double lambda_damped = 0.2) {
+  double lambda_ = damped ? lambda_damped : 0.0;
   Eigen::JacobiSVD<Eigen::MatrixXd> svd(M_, Eigen::ComputeFullU | Eigen::ComputeFullV);   
   Eigen::JacobiSVD<Eigen::MatrixXd>::SingularValuesType sing_vals_ = svd.singularValues();
   Eigen::MatrixXd S_ = M_;  // copying the dimensions of M_, its content is not needed.
@@ -232,6 +233,8 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<std::string>("ee_frame", "fr3_hand_tcp");
      auto_declare<bool>("enable_input_server", true);
      auto_declare<double>("nullspace_damping", 0.0);
+     auto_declare<double>("nullspace_posture_stiffness", 0.0);
+     auto_declare<std::vector<double>>("nullspace_q_d", std::vector<double>{});
      auto_declare<std::vector<double>>("armature", std::vector<double>{});
      auto_declare<std::vector<double>>("integrator_weights", {350, 350, 0, 50, 50, 50});
      auto_declare<std::vector<double>>("integrator_limits", {2.5, 2.5, 2.5, 1.5, 1.5, 0.5});
@@ -292,6 +295,12 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
     ee_frame_ = get_node()->get_parameter("ee_frame").as_string();
     enable_input_server_ = get_node()->get_parameter("enable_input_server").as_bool();
     nullspace_damping_ = get_node()->get_parameter("nullspace_damping").as_double();
+    nullspace_posture_stiffness_ = get_node()->get_parameter("nullspace_posture_stiffness").as_double();
+    nullspace_q_d_param_ = get_node()->get_parameter("nullspace_q_d").as_double_array();
+    if (!nullspace_q_d_param_.empty() && nullspace_q_d_param_.size() != 7) {
+      RCLCPP_ERROR(get_node()->get_logger(), "nullspace_q_d needs 7 entries (or none = joint pose at activation)");
+      return CallbackReturn::ERROR;
+    }
     const auto weights = get_node()->get_parameter("integrator_weights").as_double_array();
     const auto limits = get_node()->get_parameter("integrator_limits").as_double_array();
     if (weights.size() != 6 || limits.size() != 6) {
@@ -447,6 +456,11 @@ CallbackReturn CartesianImpedanceController::on_activate(
   tau_J_d_M.setZero();
   I_error.setZero();
   observer_initialized_ = false;  // momentum observer restarts from the current state (also after re-activation)
+  if (nullspace_q_d_param_.size() == 7) {
+    for (int i = 0; i < 7; ++i) q_posture_d_(i) = nullspace_q_d_param_[i];
+  } else {
+    q_posture_d_ = q_;
+  }
   position_d_ = initial_transform.translation();
   orientation_d_ = Eigen::Quaterniond(initial_transform.rotation());
   position_d_target_ = position_d_;
@@ -737,10 +751,17 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
   // tau_impedance = J.transpose() * Sm * (F_impedance /*+ F_repulsion + F_potential*/) + J.transpose() * Sf * F_cmd;
   tau_impedance = J.transpose() * F_impedance;
   tau_nullspace.setZero();
-  if (nullspace_damping_ > 0.0) {
-    pseudoInverse(J.transpose(), jacobian_transpose_pinv);
+  if (nullspace_damping_ > 0.0 || nullspace_posture_stiffness_ > 0.0) {
+    // posture spring towards q_posture_d_ (opt-in: without it the self-motion drifts freely; Isaac push 2026-11-07:
+    // q1 +-1.2, q3/q5 at +-2.9, q4 at its -0.12 limit after ~5 min of pushing -> arm stretched, cannot retract)
+    // + damping (nullspace_damping, or critical 2 sqrt(k) when only the stiffness is set)
+    const double d = nullspace_damping_ > 0.0 ? nullspace_damping_ : 2.0 * std::sqrt(nullspace_posture_stiffness_);
+    // the default damping (lambda 0.2) is comparable to J's singular values (~0.3-1) and leaks ~30 % of the posture
+    // torque into the task (Isaac K 20: 17 mm static error, task force at its 18 N clamp). With the posture spring on,
+    // project with lambda 0.01; damping-only keeps lambda 0.2 (unchanged, real-robot config)
+    pseudoInverse(J.transpose(), jacobian_transpose_pinv, true, nullspace_posture_stiffness_ > 0.0 ? 0.01 : 0.2);
     tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) - J.transpose() * jacobian_transpose_pinv) *
-                     (-nullspace_damping_ * dq_);
+                     (nullspace_posture_stiffness_ * (q_posture_d_ - q_) - d * dq_);
   }
   //auto tau_d_placeholder = tau_impedance
   tau_friction.setZero();
