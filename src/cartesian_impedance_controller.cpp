@@ -272,6 +272,8 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<std::vector<double>>("joint_torque_offset", std::vector<double>{});
      // rotational damping: D_rot = rotational_damping_scale * 2 sqrt(K Lambda), D_rz >= rz_damping_floor * 2 sqrt(K_rz)
      auto_declare<double>("rotational_damping_scale", 1.3);
+     // translational damping: D_trans = translational_damping_scale * 2 sqrt(K Lambda) (1.0 = critical, upstream)
+     auto_declare<double>("translational_damping_scale", 1.0);
      auto_declare<double>("rz_damping_floor", 1.0);
    } catch (const std::exception& e) {
      RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
@@ -368,6 +370,7 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
       }
     }
     rotational_damping_scale_ = get_node()->get_parameter("rotational_damping_scale").as_double();
+    translational_damping_scale_ = get_node()->get_parameter("translational_damping_scale").as_double();
     rz_damping_floor_ = get_node()->get_parameter("rz_damping_floor").as_double();
     if (friction_compensation_ != "none" && friction_compensation_ != "lugre" && friction_compensation_ != "coulomb" &&
         friction_compensation_ != "velocity" && friction_compensation_ != "hybrid") {
@@ -703,6 +706,9 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
 
   // correcting D to be critically damped
   D =  2.0 * K.cwiseMax(0.0).cwiseSqrt() * Lambda.cwiseMax(0.0).diagonal().cwiseSqrt().asDiagonal();
+  // real FR3 2026-11-16: critical translational D put 68-133 Nms/rad on joint 4 (Franka move_to_start: 30) and the
+  // elastic joint drives rang at 37 Hz while moving; half D fixed it (ci_mpc c3push_1118)
+  D.topLeftCorner(3,3) *= translational_damping_scale_;
   D.bottomRightCorner(3,3) *= rotational_damping_scale_; //increase rotational damping a bit (default 1.3)
   // minimal rotational damping in z-direction to avoid instabilities (default floor 2 sqrt(K); real FR3: the 1.3 x and
   // the floor made the wrist ring at 30-40 Hz, 2026-10-28)

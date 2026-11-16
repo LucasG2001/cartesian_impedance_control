@@ -190,6 +190,7 @@ public:
     double friction_scale_rest_{0.5};      // hybrid: torque-direction scale at rest (friction_scale while moving)
     Eigen::Matrix<double, 7, 1> joint_torque_offset_ = Eigen::Matrix<double, 7, 1>::Zero();  // added to tau_d [Nm]
     double rotational_damping_scale_{1.3};  // D_rot = scale * 2 sqrt(K Lambda)
+    double translational_damping_scale_{1.0};  // D_trans = scale * 2 sqrt(K Lambda)
     double rz_damping_floor_{1.0};          // D_rz >= floor * 2 sqrt(K_rz)
     std::unique_ptr<PinocchioModel> pinocchio_model_;
     bool usePinocchio() const { return model_source_ == "pinocchio"; }
