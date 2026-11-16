@@ -2,6 +2,12 @@
 # (EE = franka::Frame::kEndEffector, the TCP of the active Desk end-effector profile).
 # Use with franka_bringup franka.launch.py (registers the controller type) and
 #   ros2 run controller_manager spawner cartesian_impedance_controller --param-file <this file>
+#
+# DEFAULT since 2026-11-16: the matteo branch-point behaviour (f8d5fe2): tau = J^T F + coriolis only, plain integral.
+# Ring test (ci_mpc ringtest_1006, 8 moves + 3 s hold): 0/8 never still, p2p 0.03 mrad in the first second; the previous
+# default (hybrid friction comp 0.75/0.5, integral 3000 + windows/leak, nullspace damping 2.0, joint torque offset,
+# rotational damping 0.65 / rz floor 0.5) rang at 5.9 mrad with 2/8 holds never still (ringtest_1619).
+# Add an extra back only after its ci_mpc ring_variants/v5-v9 add-back test passes (ci_mpc docs/PROGRESS.md).
 controller_manager:
   ros__parameters:
     update_rate: 1000  # Hz
@@ -13,40 +19,33 @@ cartesian_impedance_controller:
     arm_id: fr3
     model_source: franka
     enable_input_server: false
-    # hybrid compensation cancels the joint friction that held the elbow: with 0 the hold showed a 1.7 Hz nullspace
-    # swing (j1 / j3 12 mrad p2p, hand still); 2.0 -> 0.02 mrad, hold drift 0.01 mm (real FR3, 2026-10-29)
-    nullspace_damping: 2.0
+    nullspace_damping: 0.0
+    # momentum observer (~/external_wrench, estimate only, no torque): Pinocchio side model for C^T dq, franka mass /
+    # gravity (with the Desk load)
     observer_gain: 30.0
     observer_torque_source: measured
     observer_gravity: false
-    # momentum observer (~/external_wrench) on the real arm: Pinocchio side model for C^T dq, franka mass / gravity
-    # (with the Desk load); without it the observer never ran with model_source franka (2026-10-28). Untested on the robot.
     observer_side_model: true
     urdf_path: /home/njohnson/ci_mpc_assets/fr3.urdf
     ee_frame: fr3_hand_tcp
-    # hybrid friction compensation (user decision 2026-10-29): velocity direction x 0.75 while a joint moves, torque
-    # direction x 0.5 at rest, also in contact. Real FR3: velocity 0.75 = the ramp optimum (1.0 over-compensated), circle
-    # 0.52-0.62 mm; coulomb 0.5 halves the breakaway. Held-out sim (realfric vs none): D1 30/30 vs 10/10 (16.9 vs 16.0 s),
-    # H1 15/15 4.9 s faster (p 0.015), H2 3/5 vs 1/5, H3 23/36 vs 15/36 (p 0.077); pre-seat force ~2 N higher, ~3x
-    # in-hand slip. First real contact runs: check the 4 N gate; over it -> friction_scale_rest 0 (= velocity mode).
-    friction_compensation: hybrid
+    # off (f8d5fe2 had it commented out). Identified values kept for the add-back test (ring_variants/v5_m_fric):
+    # hybrid, friction_scale 0.75, friction_scale_rest 0.5 (ci_mpc_sysid/results/real_fr3_20261028.yaml)
+    friction_compensation: none
     friction_scale: 0.75
     friction_scale_rest: 0.5
-    # identified on this FR3 (ci_mpc_sysid/results/real_fr3_20261028.yaml, 3 poses; j5 viscous fits negative -> 0)
     friction_coulomb: [0.815, 0.701, 0.770, 0.882, 1.159, 0.713, 0.395]
     friction_viscous: [0.41, 0.618, 0.393, 0.994, 0.0, 0.279, 0.075]
-    # gravity-model error (j2 -0.66 Nm made joint 2 sink under zero torque)
-    joint_torque_offset: [0.089, -0.658, 0.033, 0.232, -0.056, 0.230, -0.025]
-    # integral as in Isaac (only active in free space; MpcCommand.integral_enabled false switches it off)
-    integrator_weights: [3000.0, 3000.0, 3000.0, 50.0, 50.0, 50.0]
-    integrator_limits: [8.0, 8.0, 8.0, 1.5, 1.5, 0.5]
-    integrator_windows: [0.003, 0.003, 0.003, 0.02, 0.02, 0.02]
-    integrator_velocity_window: 0.01
-    integrator_freeze_on_saturation: true
-    integrator_leak: 2.0
-    integrator_reset_on_target: false
+    # off; identified j2 gravity-model error was [0.089, -0.658, 0.033, 0.232, -0.056, 0.230, -0.025] (v8_m_offset)
+    joint_torque_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # f8d5fe2 integral (only active in free space; MpcCommand.integral_enabled false switches it off)
+    integrator_weights: [350.0, 350.0, 0.0, 50.0, 50.0, 50.0]
+    integrator_limits: [2.5, 2.5, 2.5, 1.5, 1.5, 0.5]
+    integrator_windows: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    integrator_velocity_window: 0.0
+    integrator_freeze_on_saturation: false
+    integrator_leak: 0.0
+    integrator_reset_on_target: true
     mpc_timeout: 0.05
-    # half the default rotational damping (1.3 x critical, z floor 2 sqrt(K)): with the defaults the wrist rang at
-    # 30-40 Hz after MPC moves (ci_mpc PROGRESS 2026-10-28); mpc_real.yaml commands the same D while the MPC runs
-    rotational_damping_scale: 0.65
-    rz_damping_floor: 0.5
+    # f8d5fe2 damping: 1.3 x critical rotation, z floor 2 sqrt(K)
+    rotational_damping_scale: 1.3
+    rz_damping_floor: 1.0
