@@ -46,6 +46,8 @@ cartesian_impedance_controller:
     integrator_leak: 0.0
     integrator_reset_on_target: true
     mpc_timeout: 0.05
-    # f8d5fe2 damping: 1.3 x critical rotation, z floor 2 sqrt(K)
-    rotational_damping_scale: 1.3
-    rz_damping_floor: 1.0
+    # HALF the f8d5fe2 rotational damping (0.65 x critical, rz floor sqrt(K)), the one extra kept (2026-11-16): with 1.3 /
+    # 1.0 a 37 Hz buzz (j2/j4/j6, tau_d 10-18 Nm p2p, self-sustaining) started at low / extended poses (zedcal_1026
+    # pose_04; c3push_1056 going down to the push start), the same band as the 2026-10-28 wrist buzz this value fixed
+    rotational_damping_scale: 0.65
+    rz_damping_floor: 0.5
