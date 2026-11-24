@@ -190,8 +190,11 @@ controller_interface::InterfaceConfiguration
 CartesianImpedanceController::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
+  // joint_position on the real robot: Franka's internal joint impedance via the position interfaces; in Isaac
+  // (pinocchio) the joint impedance is emulated, so effort as always
+  const std::string cmd_if = (jointPosition() && !usePinocchio()) ? "/position" : "/effort";
   for (int i = 1; i <= num_joints; ++i) {
-    config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + "/effort");
+    config.names.push_back(arm_id_ + "_joint" + std::to_string(i) + cmd_if);
   }
   return config;
 }
@@ -275,6 +278,18 @@ CallbackReturn CartesianImpedanceController::on_init() {
      // translational damping: D_trans = translational_damping_scale * 2 sqrt(K Lambda) (1.0 = critical, upstream)
      auto_declare<double>("translational_damping_scale", 1.0);
      auto_declare<double>("rz_damping_floor", 1.0);
+     // llc_mode (ci_mpc 2026-11-24): "impedance" (default, unchanged) | "joint_position" (see the header)
+     auto_declare<std::string>("llc_mode", "impedance");
+     auto_declare<std::vector<double>>("jp_joint_stiffness", {3000, 3000, 3000, 2500, 2500, 2000, 2000});
+     auto_declare<std::vector<double>>("jp_joint_damping", {80, 80, 80, 60, 25, 20, 10});
+     auto_declare<std::vector<double>>("jp_max_velocity", {1.0, 1.0, 1.0, 1.0, 1.5, 1.5, 1.5});
+     auto_declare<std::vector<double>>("jp_max_acceleration", {5, 5, 5, 5, 8, 8, 8});
+     auto_declare<std::vector<double>>("jp_max_jerk", {1000, 1000, 1000, 1000, 2000, 2000, 2000});
+     auto_declare<double>("jp_filter_omega", 60.0);
+     auto_declare<double>("jp_ik_damping", 0.01);
+     auto_declare<double>("jp_posture_gain", 1.0);
+     auto_declare<double>("jp_friction_scale", 0.0);
+     auto_declare<double>("jp_extrapolate_max", 0.05);
    } catch (const std::exception& e) {
      RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
      return CallbackReturn::ERROR;
@@ -423,6 +438,43 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
                    model_source_.c_str());
       return CallbackReturn::ERROR;
     }
+    llc_mode_ = get_node()->get_parameter("llc_mode").as_string();
+    if (llc_mode_ != "impedance" && llc_mode_ != "joint_position") {
+      RCLCPP_ERROR(get_node()->get_logger(), "Unknown llc_mode '%s' (impedance | joint_position)", llc_mode_.c_str());
+      return CallbackReturn::ERROR;
+    }
+    if (jointPosition()) {
+      auto vec7 = [&](const char* name, Eigen::Matrix<double, 7, 1>& out) {
+        const auto v = get_node()->get_parameter(name).as_double_array();
+        if (v.size() != 7) {
+          throw std::runtime_error(std::string(name) + " needs 7 entries");
+        }
+        for (int i = 0; i < 7; ++i) out(i) = v[i];
+      };
+      std::vector<std::string> arm_joints;
+      for (int i = 1; i <= num_joints; ++i) {
+        arm_joints.push_back(arm_id_ + "_joint" + std::to_string(i));
+      }
+      try {
+        vec7("jp_joint_stiffness", jp_kj_);
+        vec7("jp_joint_damping", jp_dj_);
+        vec7("jp_max_velocity", jp_vmax_);
+        vec7("jp_max_acceleration", jp_amax_);
+        vec7("jp_max_jerk", jp_jmax_);
+        ik_model_ = std::make_unique<PinocchioModel>(urdf_path_, arm_joints, ee_frame_, std::vector<double>{});
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_node()->get_logger(), "llc_mode joint_position: %s", e.what());
+        return CallbackReturn::ERROR;
+      }
+      jp_omega_ = get_node()->get_parameter("jp_filter_omega").as_double();
+      jp_ik_damping_ = get_node()->get_parameter("jp_ik_damping").as_double();
+      jp_posture_gain_ = get_node()->get_parameter("jp_posture_gain").as_double();
+      jp_friction_scale_ = get_node()->get_parameter("jp_friction_scale").as_double();
+      jp_extrapolate_max_ = get_node()->get_parameter("jp_extrapolate_max").as_double();
+      RCLCPP_INFO(get_node()->get_logger(), "llc_mode joint_position: %s, IK model %s (%s), filter omega %.0f rad/s",
+                  usePinocchio() ? "Franka joint impedance EMULATED in effort mode" : "joint POSITION interfaces",
+                  urdf_path_.c_str(), ee_frame_.c_str(), jp_omega_);
+    }
                                                
   try {
     rclcpp::QoS qos_profile(1); // Depth of the message queue
@@ -466,6 +518,19 @@ CallbackReturn CartesianImpedanceController::on_activate(
   }
   position_d_ = initial_transform.translation();
   orientation_d_ = Eigen::Quaterniond(initial_transform.rotation());
+  if (jointPosition()) {
+    // start the joint filter at rest on the measured joints; ik EE -> controller EE offset from the same q (identity in
+    // Isaac; on the real robot it absorbs the Desk TCP vs the URDF ee_frame, both rigid on the flange)
+    jp_q_ = q_;
+    jp_q_ik_ = q_;
+    jp_v_.setZero();
+    jp_a_.setZero();
+    ik_model_->compute(q_, Eigen::Matrix<double, 7, 1>::Zero());
+    ik_ee_offset_ = ik_model_->pose().inverse() * initial_transform;
+    RCLCPP_INFO(get_node()->get_logger(), "joint_position: ik EE -> controller EE offset %.1f %.1f %.1f mm",
+                1e3 * ik_ee_offset_.translation()(0), 1e3 * ik_ee_offset_.translation()(1),
+                1e3 * ik_ee_offset_.translation()(2));
+  }
   position_d_target_ = position_d_;
   orientation_d_target_ = orientation_d_;
 
@@ -611,6 +676,49 @@ void CartesianImpedanceController::computeModel(Eigen::Matrix<double, 7, 7>& M,
   transform = Eigen::Affine3d(Eigen::Matrix4d::Map(pose.data()));
 }
 
+void CartesianImpedanceController::jointPositionStep(const Eigen::Vector3d& p_ref, const Eigen::Quaterniond& o_ref) {
+  static const double q_lo[7] = {-2.7437, -1.7837, -2.9007, -3.0421, -2.8065, 0.5445, -3.0159};
+  static const double q_hi[7] = {2.7437, 1.7837, 2.9007, -0.1518, 2.8065, 4.5169, 3.0159};
+  const Eigen::Matrix<double, 7, 1> zero = Eigen::Matrix<double, 7, 1>::Zero();
+  for (int it = 0; it < 2; ++it) {  // DLS IK from the last solution (warm), at the TARGET joints, not the measured ones
+    ik_model_->compute(jp_q_ik_, zero);
+    const Eigen::Affine3d T = ik_model_->pose() * ik_ee_offset_;
+    Eigen::Matrix<double, 6, 7> Jk = ik_model_->jacobian();
+    const Eigen::Vector3d r = ik_model_->pose().rotation() * ik_ee_offset_.translation();
+    Eigen::Matrix3d rx;
+    rx << 0, -r(2), r(1), r(2), 0, -r(0), -r(1), r(0), 0;
+    Jk.topRows(3) -= rx * Jk.bottomRows(3);  // linear velocity of the offset point
+    Eigen::Matrix<double, 6, 1> e;
+    e.head(3) = p_ref - T.translation();
+    Eigen::Quaterniond qc(T.rotation());
+    Eigen::Quaterniond qr = o_ref;
+    if (qr.coeffs().dot(qc.coeffs()) < 0.0) qr.coeffs() *= -1.0;
+    const Eigen::AngleAxisd aa(qr * qc.inverse());
+    e.tail(3) = aa.angle() * aa.axis();
+    const double en = e.head(3).norm();
+    if (en > 0.02) e.head(3) *= 0.02 / en;              // big jumps: walk there over several cycles
+    if (e.tail(3).norm() > 0.1) e.tail(3) *= 0.1 / e.tail(3).norm();
+    const Eigen::Matrix<double, 6, 6> JJt =
+        Jk * Jk.transpose() + jp_ik_damping_ * jp_ik_damping_ * Eigen::Matrix<double, 6, 6>::Identity();
+    const Eigen::Matrix<double, 7, 6> Jpinv = Jk.transpose() * JJt.ldlt().solve(Eigen::Matrix<double, 6, 6>::Identity());
+    Eigen::Matrix<double, 7, 1> dq = Jpinv * e;
+    if (it == 0) {
+      const Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - Jpinv * Jk;
+      dq += N * (jp_posture_gain_ * dt_ * (q_posture_d_ - jp_q_ik_));
+    }
+    jp_q_ik_ += dq;
+    for (int i = 0; i < 7; ++i) jp_q_ik_(i) = std::max(q_lo[i] + 0.03, std::min(q_hi[i] - 0.03, jp_q_ik_(i)));
+  }
+  // jerk-limited critically damped filter towards the IK solution (libfranka rejects jumps in v / a / jerk)
+  for (int i = 0; i < 7; ++i) {
+    const double a_des = jp_omega_ * jp_omega_ * (jp_q_ik_(i) - jp_q_(i)) - 2.0 * jp_omega_ * jp_v_(i);
+    const double jerk = std::max(-jp_jmax_(i), std::min(jp_jmax_(i), (a_des - jp_a_(i)) / dt_));
+    jp_a_(i) = std::max(-jp_amax_(i), std::min(jp_amax_(i), jp_a_(i) + jerk * dt_));
+    jp_v_(i) = std::max(-jp_vmax_(i), std::min(jp_vmax_(i), jp_v_(i) + jp_a_(i) * dt_));
+    jp_q_(i) += jp_v_(i) * dt_;
+  }
+}
+
 controller_interface::return_type CartesianImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {  
   dt_ = period.seconds();
   if (dt_ <= 0.0 || dt_ > 0.1) {
@@ -690,6 +798,32 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
       integral_enabled_ = true;
       I_error.setZero();  // built for the old setpoint; at the new one (current pose) no force is needed
     }
+  }
+
+  if (jointPosition()) {
+    // set-point extrapolated with the commanded twist (commands arrive at ~50-100 Hz; smooth joint targets at 1 kHz)
+    const double age = mpc_active_ ? std::min(mpc_age_, jp_extrapolate_max_) : 0.0;
+    const Eigen::Vector3d p_ref = position_d_ + twist_d_.head(3) * age;
+    jointPositionStep(p_ref, orientation_d_);
+    error.head(3) << position - p_ref;  // logged / used by nothing else in this mode
+    if (usePinocchio()) {
+      // Isaac: Franka's internal joint impedance, emulated (its gravity is off in the scene; coriolis compensated)
+      Eigen::Matrix<double, 7, 1> tau_pd = jp_kj_.cwiseProduct(jp_q_ - q_) + jp_dj_.cwiseProduct(jp_v_ - dq_);
+      Eigen::Matrix<double, 7, 1> tau = tau_pd + coriolis;
+      for (int i = 0; i < 7; ++i) {
+        tau(i) += jp_friction_scale_ * coulomb_friction(i) * std::tanh(tau_pd(i) / friction_tau_eps_);
+      }
+      static const double tau_max[7] = {87, 87, 87, 87, 12, 12, 12};
+      for (int i = 0; i < 7; ++i) tau(i) = std::max(-tau_max[i], std::min(tau_max[i], tau(i)));
+      tau = saturateTorqueRate(tau, tau_J_d_M);
+      tau_J_d_M = tau;
+      for (size_t i = 0; i < 7; ++i) command_interfaces_[i].set_value(tau(i));
+    } else {
+      for (size_t i = 0; i < 7; ++i) command_interfaces_[i].set_value(jp_q_(i));
+    }
+    outcounter++;
+    update_stiffness_and_references();
+    return controller_interface::return_type::OK;
   }
 
   error.head(3) << position - position_d_;

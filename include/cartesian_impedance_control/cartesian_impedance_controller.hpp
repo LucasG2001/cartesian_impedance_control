@@ -195,6 +195,31 @@ public:
     std::unique_ptr<PinocchioModel> pinocchio_model_;
     bool usePinocchio() const { return model_source_ == "pinocchio"; }
     bool observer_side_model_{false};  // franka model + Pinocchio side model for the observer only (real robot)
+
+    // llc_mode joint_position (ci_mpc 2026-11-24, opt-in; default "impedance" = unchanged): the Cartesian set-point is
+    // turned into joint targets (damped-least-squares IK on a Pinocchio model at the TARGET joints + posture in the
+    // nullspace, then a jerk-limited 3rd-order joint filter). Real robot (model_source franka): written to the joint
+    // POSITION interfaces = Franka's internal joint impedance controller. Isaac (model_source pinocchio): Franka's joint
+    // impedance is emulated in effort mode (tau = Kj (q_c - q) + Dj (v_c - dq) + coriolis + friction comp).
+    std::string llc_mode_{"impedance"};
+    bool jointPosition() const { return llc_mode_ == "joint_position"; }
+    std::unique_ptr<PinocchioModel> ik_model_;                       // FK / Jacobian at the target joints
+    Eigen::Affine3d ik_ee_offset_ = Eigen::Affine3d::Identity();     // ik EE -> controller EE (Desk TCP), at activation
+    Eigen::Matrix<double, 7, 1> jp_q_ik_ = Eigen::Matrix<double, 7, 1>::Zero();   // IK solution (unfiltered)
+    Eigen::Matrix<double, 7, 1> jp_q_ = Eigen::Matrix<double, 7, 1>::Zero();      // filtered joint target
+    Eigen::Matrix<double, 7, 1> jp_v_ = Eigen::Matrix<double, 7, 1>::Zero();
+    Eigen::Matrix<double, 7, 1> jp_a_ = Eigen::Matrix<double, 7, 1>::Zero();
+    Eigen::Matrix<double, 7, 1> jp_kj_ = Eigen::Matrix<double, 7, 1>::Zero();     // emulated joint stiffness [Nm/rad]
+    Eigen::Matrix<double, 7, 1> jp_dj_ = Eigen::Matrix<double, 7, 1>::Zero();     // emulated joint damping [Nms/rad]
+    Eigen::Matrix<double, 7, 1> jp_vmax_ = Eigen::Matrix<double, 7, 1>::Zero();
+    Eigen::Matrix<double, 7, 1> jp_amax_ = Eigen::Matrix<double, 7, 1>::Zero();
+    Eigen::Matrix<double, 7, 1> jp_jmax_ = Eigen::Matrix<double, 7, 1>::Zero();
+    double jp_omega_{60.0};          // filter bandwidth [rad/s] (critically damped 2nd order towards the IK solution)
+    double jp_ik_damping_{0.01};     // DLS lambda
+    double jp_posture_gain_{1.0};    // nullspace pull of the IK towards q_posture_d_ [1/s]
+    double jp_friction_scale_{0.0};  // emulation only: coulomb comp in the direction of the joint PD torque
+    double jp_extrapolate_max_{0.05};  // set-point extrapolation with the commanded twist, at most this long [s]
+    void jointPositionStep(const Eigen::Vector3d& p_ref, const Eigen::Quaterniond& o_ref);
     const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
     double dt_ = 0.001;                // control period [s], set from update()'s period
                 
