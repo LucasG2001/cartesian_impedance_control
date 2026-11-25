@@ -231,6 +231,9 @@ public:
     bool jt_active_{false};
     Eigen::Matrix<double, 7, 1> jt_q_ = Eigen::Matrix<double, 7, 1>::Zero();
     double jt_vmax_{0.4};  // joint-move speed limit [rad/s] (move_to_start ~0.4)
+    Eigen::Matrix<double, 7, 1> jt_q0_ = Eigen::Matrix<double, 7, 1>::Zero();  // joint move start (minimum-jerk profile)
+    double jt_T_{1.0};      // joint move duration [s]
+    double jt_t_{0.0};      // time into the joint move [s]
     const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
     double dt_ = 0.001;                // control period [s], set from update()'s period
                 

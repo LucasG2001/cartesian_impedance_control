@@ -696,8 +696,14 @@ void CartesianImpedanceController::jointPositionStep(const Eigen::Vector3d& p_re
   static const double q_lo[7] = {-2.7437, -1.7837, -2.9007, -3.0421, -2.8065, 0.5445, -3.0159};
   static const double q_hi[7] = {2.7437, 1.7837, 2.9007, -0.1518, 2.8065, 4.5169, 3.0159};
   const Eigen::Matrix<double, 7, 1> zero = Eigen::Matrix<double, 7, 1>::Zero();
-  if (jt_active_) {  // joint-space move: the target joints directly (within the limits), no IK
-    for (int i = 0; i < 7; ++i) jp_q_ik_(i) = std::max(q_lo[i] + 0.03, std::min(q_hi[i] - 0.03, jt_q_(i)));
+  if (jt_active_) {  // joint-space move: minimum-jerk reference start -> target (within the limits), no IK
+    jt_t_ += usePinocchio() ? dt_ : 0.001;
+    const double tau = std::min(1.0, jt_t_ / jt_T_);
+    const double sj = tau * tau * tau * (10.0 - 15.0 * tau + 6.0 * tau * tau);
+    for (int i = 0; i < 7; ++i) {
+      const double qr = jt_q0_(i) + sj * (jt_q_(i) - jt_q0_(i));
+      jp_q_ik_(i) = std::max(q_lo[i] + 0.03, std::min(q_hi[i] - 0.03, qr));
+    }
   }
   for (int it = 0; it < (jt_active_ ? 0 : 2); ++it) {  // DLS IK from the last solution (warm), at the TARGET joints
     ik_model_->compute(jp_q_ik_, zero);
@@ -830,6 +836,12 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
       jt_last_ = jt;
       if (jt->data.size() == 7) {
         for (int i = 0; i < 7; ++i) jt_q_(i) = jt->data[i];
+        // coordinated minimum-jerk move from the current commanded joints: all joints start and stop together, peak
+        // speed 1.875 x max|dq| / T <= jt_vmax_ (2026-11-25: the plain filter towards the target was bang-bang - each joint
+        // jumped to the speed cap, cruised, stopped hard, at ~8.7 rad/s^2)
+        jt_q0_ = jp_q_;
+        jt_t_ = 0.0;
+        jt_T_ = std::max(0.5, 1.875 * (jt_q_ - jt_q0_).cwiseAbs().maxCoeff() / std::max(jt_vmax_, 1e-3));
         jt_active_ = true;
         RCLCPP_INFO(get_node()->get_logger(), "joint_target: moving to [%.3f %.3f %.3f %.3f %.3f %.3f %.3f]", jt_q_(0),
                     jt_q_(1), jt_q_(2), jt_q_(3), jt_q_(4), jt_q_(5), jt_q_(6));
