@@ -728,14 +728,18 @@ void CartesianImpedanceController::jointPositionStep(const Eigen::Vector3d& p_re
     jp_q_ik_ += dq;
     for (int i = 0; i < 7; ++i) jp_q_ik_(i) = std::max(q_lo[i] + 0.03, std::min(q_hi[i] - 0.03, jp_q_ik_(i)));
   }
-  // jerk-limited critically damped filter towards the IK solution (libfranka rejects jumps in v / a / jerk)
+  // jerk-limited critically damped filter towards the IK solution (libfranka rejects jumps in v / a / jerk).
+  // Real robot: integrate with the robot's FIXED 1 ms cycle - libfranka differentiates the commanded positions at 1 kHz,
+  // so integrating with the jittery measured period produced velocity / acceleration discontinuity reflexes
+  // (2026-11-25, 0.47 s into the first joint move). Isaac: the measured period.
+  const double fdt = usePinocchio() ? dt_ : 0.001;
   for (int i = 0; i < 7; ++i) {
     const double a_des = jp_omega_ * jp_omega_ * (jp_q_ik_(i) - jp_q_(i)) - 2.0 * jp_omega_ * jp_v_(i);
-    const double jerk = std::max(-jp_jmax_(i), std::min(jp_jmax_(i), (a_des - jp_a_(i)) / dt_));
-    jp_a_(i) = std::max(-jp_amax_(i), std::min(jp_amax_(i), jp_a_(i) + jerk * dt_));
+    const double jerk = std::max(-jp_jmax_(i), std::min(jp_jmax_(i), (a_des - jp_a_(i)) / fdt));
+    jp_a_(i) = std::max(-jp_amax_(i), std::min(jp_amax_(i), jp_a_(i) + jerk * fdt));
     const double vmax = jt_active_ ? std::min(jp_vmax_(i), jt_vmax_) : jp_vmax_(i);
-    jp_v_(i) = std::max(-vmax, std::min(vmax, jp_v_(i) + jp_a_(i) * dt_));
-    jp_q_(i) += jp_v_(i) * dt_;
+    jp_v_(i) = std::max(-vmax, std::min(vmax, jp_v_(i) + jp_a_(i) * fdt));
+    jp_q_(i) += jp_v_(i) * fdt;
   }
 }
 
