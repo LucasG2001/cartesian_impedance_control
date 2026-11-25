@@ -49,6 +49,7 @@
 #include "franka_msgs/msg/errors.hpp"
 #include "messages_fr3/srv/set_pose.hpp"
 #include "std_msgs/msg/int16.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include <geometry_msgs/msg/pose.hpp>
 #include <realtime_tools/realtime_buffer.h>
 #include <realtime_tools/realtime_publisher.h>
@@ -95,6 +96,11 @@ public:
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr control_mode_sub_;
   rclcpp::Subscription<ci_mpc_msgs::msg::MpcCommand>::SharedPtr mpc_command_sub_;
   void mpc_command_callback(const ci_mpc_msgs::msg::MpcCommand::SharedPtr msg);
+  // joint-space move in llc_mode joint_position (2026-11-25, user: position control for everything, no controller
+  // switching): 7 values = go to these joints through the jerk-limited joint filter (IK bypassed, speed <= jt_vmax_);
+  // an EMPTY array = end: the Cartesian set-point becomes the current pose and Cartesian commands are followed again
+  void joint_target_callback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr joint_target_sub_;
       
 
  private:
@@ -220,6 +226,11 @@ public:
     double jp_friction_scale_{0.0};  // emulation only: coulomb comp in the direction of the joint PD torque
     double jp_extrapolate_max_{0.05};  // set-point extrapolation with the commanded twist, at most this long [s]
     void jointPositionStep(const Eigen::Vector3d& p_ref, const Eigen::Quaterniond& o_ref);
+    realtime_tools::RealtimeBuffer<std_msgs::msg::Float64MultiArray::SharedPtr> jt_buffer_;
+    std_msgs::msg::Float64MultiArray::SharedPtr jt_last_;
+    bool jt_active_{false};
+    Eigen::Matrix<double, 7, 1> jt_q_ = Eigen::Matrix<double, 7, 1>::Zero();
+    double jt_vmax_{0.4};  // joint-move speed limit [rad/s] (move_to_start ~0.4)
     const double delta_tau_max_{1.0};  // per 1 ms step, scaled with dt_
     double dt_ = 0.001;                // control period [s], set from update()'s period
                 

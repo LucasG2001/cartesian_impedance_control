@@ -105,6 +105,11 @@ void CartesianImpedanceController::mpc_command_callback(const ci_mpc_msgs::msg::
   mpc_buffer_.writeFromNonRT(msg);  // applied in update(); a new pointer marks a new command
 }
 
+void CartesianImpedanceController::joint_target_callback(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+{
+  jt_buffer_.writeFromNonRT(msg);  // applied in update()
+}
+
 void CartesianImpedanceController::control_mode_callback(const std_msgs::msg::Int16::SharedPtr msg)
 {
   RCLCPP_INFO(get_node()->get_logger(), "Received Control Mode Callback.");
@@ -290,6 +295,7 @@ CallbackReturn CartesianImpedanceController::on_init() {
      auto_declare<double>("jp_posture_gain", 1.0);
      auto_declare<double>("jp_friction_scale", 0.0);
      auto_declare<double>("jp_extrapolate_max", 0.05);
+     auto_declare<double>("jp_joint_move_max_velocity", 0.4);
    } catch (const std::exception& e) {
      RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
      return CallbackReturn::ERROR;
@@ -471,6 +477,7 @@ CallbackReturn CartesianImpedanceController::on_configure(const rclcpp_lifecycle
       jp_posture_gain_ = get_node()->get_parameter("jp_posture_gain").as_double();
       jp_friction_scale_ = get_node()->get_parameter("jp_friction_scale").as_double();
       jp_extrapolate_max_ = get_node()->get_parameter("jp_extrapolate_max").as_double();
+      jt_vmax_ = get_node()->get_parameter("jp_joint_move_max_velocity").as_double();
       RCLCPP_INFO(get_node()->get_logger(), "llc_mode joint_position: %s, IK model %s (%s), filter omega %.0f rad/s",
                   usePinocchio() ? "Franka joint impedance EMULATED in effort mode" : "joint POSITION interfaces",
                   urdf_path_.c_str(), ee_frame_.c_str(), jp_omega_);
@@ -555,6 +562,15 @@ CallbackReturn CartesianImpedanceController::on_activate(
   integral_enabled_ = true;
 
   // Create the subscriber in the on_activate method
+  jt_buffer_.writeFromNonRT(nullptr);
+  jt_last_.reset();
+  jt_active_ = false;
+  if (jointPosition()) {
+    joint_target_sub_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+      "/cartesian_impedance_controller/joint_target", 1,
+      std::bind(&CartesianImpedanceController::joint_target_callback, this, std::placeholders::_1));
+  }
+
   control_mode_sub_ = get_node()->create_subscription<std_msgs::msg::Int16>(
     "/cartesian_impedance_controller/control_mode", 1, std::bind(&CartesianImpedanceController::control_mode_callback, this, std::placeholders::_1));
 
@@ -680,7 +696,10 @@ void CartesianImpedanceController::jointPositionStep(const Eigen::Vector3d& p_re
   static const double q_lo[7] = {-2.7437, -1.7837, -2.9007, -3.0421, -2.8065, 0.5445, -3.0159};
   static const double q_hi[7] = {2.7437, 1.7837, 2.9007, -0.1518, 2.8065, 4.5169, 3.0159};
   const Eigen::Matrix<double, 7, 1> zero = Eigen::Matrix<double, 7, 1>::Zero();
-  for (int it = 0; it < 2; ++it) {  // DLS IK from the last solution (warm), at the TARGET joints, not the measured ones
+  if (jt_active_) {  // joint-space move: the target joints directly (within the limits), no IK
+    for (int i = 0; i < 7; ++i) jp_q_ik_(i) = std::max(q_lo[i] + 0.03, std::min(q_hi[i] - 0.03, jt_q_(i)));
+  }
+  for (int it = 0; it < (jt_active_ ? 0 : 2); ++it) {  // DLS IK from the last solution (warm), at the TARGET joints
     ik_model_->compute(jp_q_ik_, zero);
     const Eigen::Affine3d T = ik_model_->pose() * ik_ee_offset_;
     Eigen::Matrix<double, 6, 7> Jk = ik_model_->jacobian();
@@ -714,7 +733,8 @@ void CartesianImpedanceController::jointPositionStep(const Eigen::Vector3d& p_re
     const double a_des = jp_omega_ * jp_omega_ * (jp_q_ik_(i) - jp_q_(i)) - 2.0 * jp_omega_ * jp_v_(i);
     const double jerk = std::max(-jp_jmax_(i), std::min(jp_jmax_(i), (a_des - jp_a_(i)) / dt_));
     jp_a_(i) = std::max(-jp_amax_(i), std::min(jp_amax_(i), jp_a_(i) + jerk * dt_));
-    jp_v_(i) = std::max(-jp_vmax_(i), std::min(jp_vmax_(i), jp_v_(i) + jp_a_(i) * dt_));
+    const double vmax = jt_active_ ? std::min(jp_vmax_(i), jt_vmax_) : jp_vmax_(i);
+    jp_v_(i) = std::max(-vmax, std::min(vmax, jp_v_(i) + jp_a_(i) * dt_));
     jp_q_(i) += jp_v_(i) * dt_;
   }
 }
@@ -800,6 +820,30 @@ controller_interface::return_type CartesianImpedanceController::update(const rcl
     }
   }
 
+  if (jointPosition()) {
+    const auto jt = *jt_buffer_.readFromRT();
+    if (jt && jt != jt_last_) {
+      jt_last_ = jt;
+      if (jt->data.size() == 7) {
+        for (int i = 0; i < 7; ++i) jt_q_(i) = jt->data[i];
+        jt_active_ = true;
+        RCLCPP_INFO(get_node()->get_logger(), "joint_target: moving to [%.3f %.3f %.3f %.3f %.3f %.3f %.3f]", jt_q_(0),
+                    jt_q_(1), jt_q_(2), jt_q_(3), jt_q_(4), jt_q_(5), jt_q_(6));
+      } else if (jt_active_) {
+        // end of the joint move: hold here in Cartesian (set-point = current pose, IK warm-started at the commanded joints)
+        jt_active_ = false;
+        position_d_ = position;
+        position_d_target_ = position;
+        orientation_d_ = orientation;
+        orientation_d_target_ = orientation;
+        twist_d_.setZero();
+        F_ff_.setZero();
+        mpc_active_ = false;
+        jp_q_ik_ = jp_q_;
+        RCLCPP_INFO(get_node()->get_logger(), "joint_target: done, holding the current pose (Cartesian)");
+      }
+    }
+  }
   if (jointPosition()) {
     // set-point extrapolated with the commanded twist (commands arrive at ~50-100 Hz; smooth joint targets at 1 kHz)
     const double age = mpc_active_ ? std::min(mpc_age_, jp_extrapolate_max_) : 0.0;
